@@ -1,0 +1,40 @@
+/target/
+.profile-home/
+.live-home/
+.DS_Store
+
+# Never tracked, and the reason is publication rather than tidiness.
+#
+# A live vault holds the developer's actual memories and the exposure records of
+# every search run against it. An engine key or provider token in a .env is a
+# credential. Neither is visible to `git ls-files`, so neither would be caught by
+# a check that derives its file set from the index -- and both are one `git add`
+# of a directory away from being in a public repository's history for good.
+.env
+.env.*
+!.env.example
+.kaleidoscope/
+.coverage
+coverage.xml
+*.egg-info/
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/
+**/__pycache__/
+**/*.py[cod]
+python/build/
+python/dist/
+python/.pytest_cache/
+python/.venv*/
+python/**/__pycache__/
+typescript/coverage/
+typescript/dist/
+typescript/node_modules/
+# conformance/ has its own package.json, so npm installs here too.
+conformance/node_modules/
+conformance/.work/
+
+# Regenerated test debug output, never a repository artefact. Both are written
+# on every run by the parity suites and read by nothing.
+python/tests/artifacts/
+typescript/test/artifacts/

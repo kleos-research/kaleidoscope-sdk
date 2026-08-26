@@ -1,0 +1,48 @@
+{
+  "name": "@kleos-research/kaleidoscope",
+  "version": "0.1.0-rc.1",
+  "private": true,
+  "type": "module",
+  "description": "Kaleidoscope TypeScript client for the local CLI and stdio MCP contract",
+  "author": "Kleos Research",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kleos-research/kaleidoscope-sdk.git"
+  },
+  "files": ["bin", "dist/src", "README.md", "LICENSE", "NOTICE"],
+  "bin": {
+    "kaleidoscope": "./bin/kaleidoscope.js",
+    "kscope": "./bin/kscope.js"
+  },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "poison": "python3 ../scripts/poison_scan.py",
+    "build": "tsc -p tsconfig.json",
+    "test:bootstrap": "sh ../scripts/bootstrap-typescript-tests.sh",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@openai/agents": "0.17.0"
+  },
+  "optionalDependencies": {
+    "@kleos-research/kaleidoscope-darwin-arm64": "0.1.0-rc.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "tsx": "4.20.6",
+    "typescript": "7.0.2"
+  }
+}

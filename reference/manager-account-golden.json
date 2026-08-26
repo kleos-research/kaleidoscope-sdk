@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "commands": {
+    "status": ["status", "--json"],
+    "login_loopback": ["login"],
+    "login_device": ["login", "--device"],
+    "logout_current": ["logout"],
+    "logout_all": ["logout", "--all-devices"],
+    "logout_local": ["logout", "--local-only"],
+    "link_github": ["account", "link", "github"],
+    "unlink": [
+      "account",
+      "unlink",
+      "55555555-5555-4555-8555-555555555555"
+    ],
+    "identities": ["account", "identities"],
+    "revoke_session": ["account", "revoke-session"],
+    "devices": ["devices", "list"],
+    "revoke_device": [
+      "devices",
+      "revoke",
+      "33333333-3333-4333-8333-333333333333"
+    ]
+  },
+  "signed_out": {
+    "version": 1,
+    "state": "signed_out",
+    "account_id": null,
+    "device_id": null,
+    "stale": false
+  }
+}

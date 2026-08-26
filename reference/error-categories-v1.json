@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "categories": {
+    "invalid_descriptor": {
+      "python": "DescriptorError",
+      "typescript": "DescriptorError"
+    },
+    "missing_binary": {
+      "python": "MissingBinaryError",
+      "typescript": "MissingBinaryError"
+    },
+    "child_crash": {
+      "python": "ChildProcessError",
+      "typescript": "ChildProcessError"
+    },
+    "manager_command": {
+      "python": "ManagerCommandError",
+      "typescript": "ManagerCommandError"
+    },
+    "deadline_exceeded": {
+      "python": "DeadlineExceededError",
+      "typescript": "DeadlineExceededError"
+    },
+    "cancelled": {
+      "python": "asyncio.CancelledError",
+      "typescript": "ProcessCancelledError"
+    },
+    "output_limit": {
+      "python": "OutputLimitError",
+      "typescript": "OutputLimitError"
+    },
+    "protocol_contract": {
+      "python": "ProtocolError",
+      "typescript": "ProtocolContractError"
+    },
+    "native_refusal": {
+      "python": "NativeRefusalError",
+      "typescript": "NativeRefusalError"
+    },
+    "duplicate_search": {
+      "python": "DuplicateSearchError",
+      "typescript": "DuplicateSearchError"
+    },
+    "tool_refusal": {
+      "python": "ToolRefusalError",
+      "typescript": "ToolRefusalError"
+    },
+    "entitlement": {
+      "python": "EntitlementError",
+      "typescript": "EntitlementError"
+    },
+    "entitlement": {
+      "python": "EntitlementError",
+      "typescript": "EntitlementError"
+    }
+  }
+}

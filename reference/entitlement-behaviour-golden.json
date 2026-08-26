@@ -1,0 +1,88 @@
+{
+  "_comment": "Observed behaviour of the alpha entitlement refusal path, driven through a real SDK spawn against python/tests/fixtures/fake_kscope_mcp.py. Both SDKs assert against this file; a divergence in what the caller receives fails a test instead of reaching a user. Regenerate from Python only.",
+  "contract_version": 1,
+  "key_file_placeholder": "__KEY_FILE__",
+  "scenarios": {
+    "E_NO_KEY": {
+      "reason": "E_NO_KEY",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: no API key was found, so the engine refused to start.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nAsk the alpha owner for a key if you do not have one.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_KEY_FILE_UNUSABLE": {
+      "reason": "E_KEY_FILE_UNUSABLE",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: the key file at __KEY_FILE__ could not be used.\nIt must be a regular file, no larger than 256 bytes, owned by you and set to\npermissions 0600, containing the key and nothing else.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_MALFORMED_KEY": {
+      "reason": "E_MALFORMED_KEY",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: the API key is not a well-formed alpha key.\nIt must be \"ksk_alpha.\" followed by 43 characters. Check for a truncated\npaste, a stray quote, or surrounding whitespace.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_UNVERIFIED": {
+      "reason": "E_UNVERIFIED",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: this API key has not been verified on this machine yet.\nA background revalidation has been started. Connect to the network and try\nagain. If it keeps failing, ask the alpha owner to confirm the key is active.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_UNKNOWN_KEY": {
+      "reason": "E_UNKNOWN_KEY",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: the control plane does not recognise this API key.\nThis is not a revocation. Check for a truncated paste, then ask the alpha owner\nto confirm the key was issued for this alpha.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_REVOKED": {
+      "reason": "E_REVOKED",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: this API key has been revoked by the alpha owner.\nContact the alpha owner for a replacement key. Nothing you do locally will\nrestore this one.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_KEY_EXPIRED": {
+      "reason": "E_KEY_EXPIRED",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: this API key has expired.\nContact the alpha owner for a replacement key.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_GRACE_EXPIRED": {
+      "reason": "E_GRACE_EXPIRED",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: this API key could not be revalidated within its grace\nwindow, so gated commands have stopped working.\nReconnect to the network and try again; the key itself may still be fine.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    },
+    "E_CLOCK_BACKWARDS": {
+      "reason": "E_CLOCK_BACKWARDS",
+      "code": "entitlement",
+      "error_class": "EntitlementError",
+      "message": "Kaleidoscope alpha: the system clock has moved backwards since the last\nentitlement check, so the grace window cannot be evaluated.\nCorrect the system clock and try again.\nYour local vault data is intact and unchanged.",
+      "key_file": "__KEY_FILE__",
+      "diagnostic_present": true,
+      "diagnostic_bounded": true
+    }
+  }
+}

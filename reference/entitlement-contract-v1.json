@@ -1,0 +1,132 @@
+{
+  "_comment": "The frozen alpha-entitlement contract shared by three implementations. THIS FILE HAS COPIES. Authored here; consumed by python/ (tests/test_entitlement.py) and typescript/ (test/entitlement.test.ts); kept in agreement, field for field, with the engine's own contract-test fixture, which the engine asserts against. Editing one copy and not the others is what the goldens exist to catch.",
+  "contract_version": 1,
+  "bootstrap_environment": [
+    "APPDATA",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LOCALAPPDATA",
+    "LOGNAME",
+    "PATH",
+    "PATHEXT",
+    "SHELL",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMPDIR",
+    "USER",
+    "USERNAME",
+    "USERPROFILE",
+    "XDG_CONFIG_HOME"
+  ],
+  "entitlement_environment": [
+    "KALEIDOSCOPE_API_KEY",
+    "KSCOPE_ENTITLEMENT_HOME"
+  ],
+  "never_admitted": [
+    "KALEIDOSCOPE_CONTROL_PLANE_ORIGIN",
+    "KSCOPE_ENTITLEMENT_PROBE",
+    "KSCOPE_PROFILE_HOME",
+    "KALEIDOSCOPE_TEST_SECRET",
+    "KALEIDOSCOPE_TOKEN",
+    "AZURE_OPENAI_API_KEY",
+    "SUPABASE_SECRET_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "AWS_SECRET_ACCESS_KEY"
+  ],
+  "exit_codes": {
+    "applied": 0,
+    "refused": 2,
+    "partial": 3,
+    "entitlement_refused": 4
+  },
+  "_diagnostic_edge_comment": "The UNION of Python str.isspace() and JavaScript String.trim(), stripped from both ends of a diagnostic. Neither built-in is usable: Python treats U+001C-U+001F as whitespace and U+FEFF as not, JavaScript does the reverse, and the two produced different diagnostics from identical child bytes. Code points, because several are invisible.",
+  "diagnostic_edge_code_points": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    32,
+    133,
+    160,
+    5760,
+    8192,
+    8193,
+    8194,
+    8195,
+    8196,
+    8197,
+    8198,
+    8199,
+    8200,
+    8201,
+    8202,
+    8232,
+    8233,
+    8239,
+    8287,
+    12288,
+    28,
+    29,
+    30,
+    31,
+    65279
+  ],
+  "max_diagnostic_bytes": 4096,
+  "refusal_marker_prefix": "kscope-entitlement-refusal: ",
+  "refusal_marker_pattern": "^kscope-entitlement-refusal: ([A-Z][A-Z0-9_]{2,39})$",
+  "refusal_identifiers": [
+    "E_NO_KEY",
+    "E_KEY_FILE_UNUSABLE",
+    "E_MALFORMED_KEY",
+    "E_UNVERIFIED",
+    "E_UNKNOWN_KEY",
+    "E_REVOKED",
+    "E_KEY_EXPIRED",
+    "E_GRACE_EXPIRED",
+    "E_CLOCK_BACKWARDS"
+  ],
+  "sdk_only_identifiers": [
+    "E_UNKNOWN"
+  ],
+  "gate_report_keys": [
+    "status",
+    "entitlement_build",
+    "gated_commands",
+    "entitlement_home",
+    "key_file",
+    "build_features",
+    "marker"
+  ],
+  "gate_marker_present": "kaleidoscope.alpha-entitlement-gate.v1:present",
+  "gate_marker_absent": "kaleidoscope.alpha-entitlement-gate.v1:absent",
+  "gated_commands": [
+    "mcp",
+    "context",
+    "call",
+    "serve"
+  ],
+  "key_file_name": "api-key",
+  "max_key_file_bytes": 256,
+  "missing_key_file_placeholder": "the key file",
+  "messages": {
+    "E_NO_KEY": "Kaleidoscope alpha: no API key was found, so the engine refused to start.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to {key_file} with permissions 0600.\nAsk the alpha owner for a key if you do not have one.\nYour local vault data is intact and unchanged.",
+    "E_KEY_FILE_UNUSABLE": "Kaleidoscope alpha: the key file at {key_file} could not be used.\nIt must be a regular file, no larger than 256 bytes, owned by you and set to\npermissions 0600, containing the key and nothing else.\nYour local vault data is intact and unchanged.",
+    "E_MALFORMED_KEY": "Kaleidoscope alpha: the API key is not a well-formed alpha key.\nIt must be \"ksk_alpha.\" followed by 43 characters. Check for a truncated\npaste, a stray quote, or surrounding whitespace.\nYour local vault data is intact and unchanged.",
+    "E_UNVERIFIED": "Kaleidoscope alpha: this API key has not been verified on this machine yet.\nA background revalidation has been started. Connect to the network and try\nagain. If it keeps failing, ask the alpha owner to confirm the key is active.\nYour local vault data is intact and unchanged.",
+    "E_UNKNOWN_KEY": "Kaleidoscope alpha: the control plane does not recognise this API key.\nThis is not a revocation. Check for a truncated paste, then ask the alpha owner\nto confirm the key was issued for this alpha.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to {key_file} with permissions 0600.\nYour local vault data is intact and unchanged.",
+    "E_REVOKED": "Kaleidoscope alpha: this API key has been revoked by the alpha owner.\nContact the alpha owner for a replacement key. Nothing you do locally will\nrestore this one.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to {key_file} with permissions 0600.\nYour local vault data is intact and unchanged.",
+    "E_KEY_EXPIRED": "Kaleidoscope alpha: this API key has expired.\nContact the alpha owner for a replacement key.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to {key_file} with permissions 0600.\nYour local vault data is intact and unchanged.",
+    "E_GRACE_EXPIRED": "Kaleidoscope alpha: this API key could not be revalidated within its grace\nwindow, so gated commands have stopped working.\nReconnect to the network and try again; the key itself may still be fine.\nYour local vault data is intact and unchanged.",
+    "E_CLOCK_BACKWARDS": "Kaleidoscope alpha: the system clock has moved backwards since the last\nentitlement check, so the grace window cannot be evaluated.\nCorrect the system clock and try again.\nYour local vault data is intact and unchanged.",
+    "E_UNKNOWN": "Kaleidoscope alpha: the engine refused this command for an entitlement reason\nthis SDK does not recognise. The engine and this SDK may be different versions.\nSee the engine diagnostic attached to this error.\nYour local vault data is intact and unchanged."
+  },
+  "redaction_patterns": [
+    "ksk_alpha\\.[A-Za-z0-9_-]*"
+  ],
+  "_redaction_comment": "Shape masks applied to a bounded child diagnostic before it reaches an exception. REDACTION IS NOT VALIDATION: a string that matches is masked whether or not it is a real key, a string that does not match is not treated as bad, and nothing in either SDK branches on whether one matched. One pattern with no length arithmetic, so a key sliced in half by the 4096-byte diagnostic bound is masked too -- a {43} rule would miss it. ADDITIVE: the engine's contract test reads named keys off a JSON value and rejects no unknown ones, so this key does not break the engine's copy."
+}

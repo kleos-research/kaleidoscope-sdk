@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory.kleosresearch.xyz/schemas/dx10b-non-auth-account-offline-local-evidence-v1.json",
+  "title": "Kaleidoscope DX-10B local non-auth and account-offline evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "scope",
+    "platform",
+    "candidate",
+    "sdk_inputs",
+    "tests",
+    "dependency_held",
+    "promotion"
+  ],
+  "properties": {
+    "schema_version": {"const": "kaleidoscope.dx10b-non-auth-account-offline-local-evidence.v1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "scope": {"const": "local-only-non-auth-account-offline"},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "native_tested"],
+      "properties": {
+        "os": {"const": "darwin"},
+        "architecture": {"const": "arm64"},
+        "native_tested": {"const": true}
+      }
+    },
+    "candidate": {"type": "object"},
+    "sdk_inputs": {"type": "object"},
+    "tests": {"type": "object"},
+    "dependency_held": {"type": "object"},
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorized", "release_readiness_claimed"],
+      "properties": {
+        "authorized": {"const": false},
+        "release_readiness_claimed": {"const": false}
+      }
+    }
+  }
+}

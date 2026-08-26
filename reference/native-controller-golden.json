@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "request": {
+    "query": "fixture"
+  },
+  "success": {
+    "status": "accepted",
+    "operation": "search",
+    "invocation": 1,
+    "payload_sha256": "3cbc73ebd178bcccd4eda9a93bdd47288bcee31fe170f89eb44d20551c5315bd",
+    "payload": {
+      "query": "fixture"
+    }
+  },
+  "retry": {
+    "maximum_attempts": 2,
+    "deadline_scope": "original_operation",
+    "payload_rule": "identical_canonical_json",
+    "eligible": [
+      "pre_response_crash",
+      "uncertain_timeout"
+    ],
+    "ineligible": [
+      "native_refusal",
+      "protocol_contract",
+      "output_limit",
+      "cancelled"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+# >>> kaleidoscope-manager owner=kaleidoscope-manager-v1 host=codex
+[mcp_servers.kaleidoscope]
+command = "/absolute/path/to/kscope"
+args = ["mcp", "--profile", "default"]
+enabled = true
+required = false
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+enabled_tools = ["search", "remember"]
+default_tools_approval_mode = "writes"
+
+[mcp_servers.kaleidoscope.tools.search]
+approval_mode = "approve"
+# <<< kaleidoscope-manager owner=kaleidoscope-manager-v1

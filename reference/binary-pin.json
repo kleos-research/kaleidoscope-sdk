@@ -1,0 +1,8 @@
+{
+  "source_commit": "d96355632cc52816472106d0776ce63d73631fef",
+  "sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
+  "shared_vault_runtime_sha256": "9eeae09b2f5912c6ee49a8b6a5d7fd523addad9d0424aee6438804f1a86fc594",
+  "isolated_distribution_candidate_sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
+  "public_contract_sha256": "a2357ed6c00e3e143d08581590571447e31d24fd0e7d2466d28a211a0515c75e",
+  "mcp_protocol_revision": "2025-11-25"
+}

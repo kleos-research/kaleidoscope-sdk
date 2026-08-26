@@ -1,0 +1,16 @@
+{
+  "extends": "../typescript/tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "lib": ["ESNext"],
+    "noEmit": true,
+    "rootDir": "..",
+    "types": ["node"],
+    "typeRoots": ["../typescript/node_modules/@types"]
+  },
+  "include": [
+    "../typescript/src/**/*.ts",
+    "typescript_account_offline_probe.ts",
+    "typescript_persistent_probe.ts"
+  ]
+}

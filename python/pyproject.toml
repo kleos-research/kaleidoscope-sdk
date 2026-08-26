@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kaleidoscope-memory"
+version = "0.1.0rc1"
+description = "Kaleidoscope Python client for the local CLI and stdio MCP contract"
+readme = "README.md"
+# PEP 639: `license` is the SPDX expression and `license-files` are globs whose
+# contents land in `*.dist-info/licenses/` in the wheel. No `License ::`
+# classifier: PEP 639 deprecated those, and hatchling 1.27 (pinned above) is the
+# release that implements the replacement.
+authors = [{ name = "Kleos Research" }]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.28.1,<3",
+  "kaleidoscope-memory-native-darwin-arm64==0.1.0rc1; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[project.scripts]
+kaleidoscope = "kaleidoscope_memory.cli:manager_main"
+kscope = "kaleidoscope_memory.cli:engine_main"
+
+[project.optional-dependencies]
+claude = ["claude-agent-sdk==0.2.143"]
+crewai = [
+  "crewai==1.15.17",
+  "crewai-tools[mcp]==1.15.17",
+  "mcp==1.28.1",
+]
+generic-mcp-v2 = ["mcp==2.0.0"]
+langgraph = [
+  "langchain==1.3.16",
+  "langchain-mcp-adapters==0.3.2",
+  "langgraph==1.2.11",
+  "mcp==1.29.0",
+]
+openai = ["openai-agents==0.22.0", "mcp==1.29.0"]
+test = [
+  "pytest==8.4.2",
+  "pytest-asyncio==1.2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kaleidoscope_memory"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]

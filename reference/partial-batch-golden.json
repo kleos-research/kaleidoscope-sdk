@@ -1,0 +1,18 @@
+{
+  "request": {
+    "mode": "create",
+    "items": [
+      {"content_md": "# Accepted A", "semantic_delta": {"fixture": "a"}},
+      {"content_md": "# Repair B", "semantic_delta": {"fixture": "b"}},
+      {"content_md": "# Accepted C", "semantic_delta": {"fixture": "c"}}
+    ]
+  },
+  "response": {
+    "results": [
+      {"status": "created"},
+      {"status": "refused", "reason": "fixture validation refusal"},
+      {"status": "created"}
+    ]
+  },
+  "refused_indexes": [1]
+}

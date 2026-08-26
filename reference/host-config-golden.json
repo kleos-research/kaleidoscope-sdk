@@ -1,0 +1,75 @@
+{
+  "codex": {
+    "enabled": true,
+    "required": false,
+    "startup_timeout_sec": 10,
+    "tool_timeout_sec": 30,
+    "enabled_tools": [
+      "search",
+      "remember"
+    ],
+    "default_tools_approval_mode": "writes",
+    "search_approval_mode": "approve"
+  },
+  "claude_code": {
+    "mcpServers": {
+      "kaleidoscope": {
+        "type": "stdio",
+        "command": "__KSCOPE_BINARY__",
+        "args": [
+          "mcp",
+          "--profile",
+          "dx07-shared"
+        ],
+        "env": {}
+      }
+    }
+  },
+  "cursor": {
+    "mcpServers": {
+      "kaleidoscope": {
+        "command": "__KSCOPE_BINARY__",
+        "args": [
+          "mcp",
+          "--profile",
+          "dx07-shared"
+        ],
+        "env": {}
+      }
+    }
+  },
+  "opencode_stable_v1": {
+    "$schema": "https://opencode.ai/config.json",
+    "mcp": {
+      "kaleidoscope": {
+        "type": "local",
+        "command": [
+          "__KSCOPE_BINARY__",
+          "mcp",
+          "--profile",
+          "dx07-shared"
+        ],
+        "environment": {},
+        "enabled": true
+      }
+    }
+  },
+  "opencode_beta_v2": {
+    "$schema": "https://opencode.ai/config.json",
+    "mcp": {
+      "servers": {
+        "kaleidoscope": {
+          "type": "local",
+          "command": [
+            "__KSCOPE_BINARY__",
+            "mcp",
+            "--profile",
+            "dx07-shared"
+          ],
+          "environment": {},
+          "codemode": false
+        }
+      }
+    }
+  }
+}

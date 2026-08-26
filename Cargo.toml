@@ -1,0 +1,69 @@
+[package]
+name = "kaleidoscope-manager"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Public local control-plane manager for the Kaleidoscope engine"
+# `license` names the terms; `authors` names who holds the copyright in them.
+# A licence with no holder is the defect this repository just finished fixing in
+# the other direction, so both halves are stated wherever metadata is read:
+# here, in python/pyproject.toml, and in typescript/package.json. All four
+# manifests spell the holder the same way, and a test asserts that they do.
+authors = ["Kleos Research"]
+license = "Apache-2.0"
+repository = "https://github.com/kleos-research/kaleidoscope-sdk"
+publish = false
+
+[features]
+default = ["native-account-http", "native-credential-store"]
+native-account-http = ["dep:ureq"]
+native-credential-store = [
+    "dep:keyring",
+    "dep:security-framework",
+    "dep:security-framework-sys",
+]
+
+[lib]
+name = "kaleidoscope_manager"
+
+[[bin]]
+name = "kaleidoscope"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+fs2 = "0.4.3"
+rand = "0.8.7"
+rsa = { version = "0.9.8", features = ["sha2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+sha2 = "0.10.9"
+subtle = "2.6.1"
+thiserror = "2.0.19"
+toml_edit = { version = "0.23.9", default-features = false, features = ["parse"] }
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.18.1", features = ["serde"] }
+zeroize = "1.9.0"
+ureq = { version = "2.12.1", default-features = false, features = ["tls"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7.0", optional = true }
+security-framework-sys = { version = "2.17.0", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "=2.3.3", default-features = false, features = ["platform-windows"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=2.3.3", default-features = false, features = ["linux-secret-service"], optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"

@@ -1,0 +1,79 @@
+{
+  "_comment": "The refusal rows both SDKs must produce, asserted independently by python/tests/test_parity.py and typescript/test/parity.test.ts. Committed rather than exchanged at run time: a rendezvous file only compares when both suites have already run, is stale when one runs alone, and races when they run together. Regenerate from Python with pytest --regenerate-entitlement-parity.",
+  "contract_version": 1,
+  "key_file_placeholder": "__KEY_FILE__",
+  "rows": [
+    {
+      "scenario": "E_NO_KEY",
+      "reason": "E_NO_KEY",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: no API key was found, so the engine refused to start.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nAsk the alpha owner for a key if you do not have one.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_KEY_FILE_UNUSABLE",
+      "reason": "E_KEY_FILE_UNUSABLE",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: the key file at __KEY_FILE__ could not be used.\nIt must be a regular file, no larger than 256 bytes, owned by you and set to\npermissions 0600, containing the key and nothing else.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_MALFORMED_KEY",
+      "reason": "E_MALFORMED_KEY",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: the API key is not a well-formed alpha key.\nIt must be \"ksk_alpha.\" followed by 43 characters. Check for a truncated\npaste, a stray quote, or surrounding whitespace.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_UNVERIFIED",
+      "reason": "E_UNVERIFIED",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: this API key has not been verified on this machine yet.\nA background revalidation has been started. Connect to the network and try\nagain. If it keeps failing, ask the alpha owner to confirm the key is active.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_UNKNOWN_KEY",
+      "reason": "E_UNKNOWN_KEY",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: the control plane does not recognise this API key.\nThis is not a revocation. Check for a truncated paste, then ask the alpha owner\nto confirm the key was issued for this alpha.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_REVOKED",
+      "reason": "E_REVOKED",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: this API key has been revoked by the alpha owner.\nContact the alpha owner for a replacement key. Nothing you do locally will\nrestore this one.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_KEY_EXPIRED",
+      "reason": "E_KEY_EXPIRED",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: this API key has expired.\nContact the alpha owner for a replacement key.\nPass it as api_key= when you construct the client, set KALEIDOSCOPE_API_KEY in\nyour environment, or write the key to __KEY_FILE__ with permissions 0600.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_GRACE_EXPIRED",
+      "reason": "E_GRACE_EXPIRED",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: this API key could not be revalidated within its grace\nwindow, so gated commands have stopped working.\nReconnect to the network and try again; the key itself may still be fine.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    },
+    {
+      "scenario": "E_CLOCK_BACKWARDS",
+      "reason": "E_CLOCK_BACKWARDS",
+      "code": "entitlement",
+      "message": "Kaleidoscope alpha: the system clock has moved backwards since the last\nentitlement check, so the grace window cannot be evaluated.\nCorrect the system clock and try again.\nYour local vault data is intact and unchanged.",
+      "diagnostic_length_bounded": true,
+      "diagnostic_carries_marker": true
+    }
+  ]
+}

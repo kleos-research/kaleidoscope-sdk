@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "transport": "stdio",
+  "command": "__KSCOPE_BINARY__",
+  "args": [
+    "mcp",
+    "--profile",
+    "dx07-shared"
+  ],
+  "tools": [
+    "search",
+    "remember"
+  ],
+  "environment": {}
+}

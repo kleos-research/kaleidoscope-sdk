@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory.kleosresearch.xyz/schemas/dx10b-native-host-local-evidence-v1.json",
+  "title": "Kaleidoscope DX-10B native host local evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "scope",
+    "platform",
+    "sdk_input",
+    "candidate",
+    "host_inventory",
+    "tests",
+    "contract_sources",
+    "dependency_held",
+    "promotion"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaleidoscope.dx10b-native-host-local-evidence.v1"
+    },
+    "generated_at": {"type": "string", "format": "date-time"},
+    "scope": {
+      "const": "credential-free-native-host-management-and-generic-mcp-discovery"
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "native_tested"],
+      "properties": {
+        "os": {"const": "darwin"},
+        "architecture": {"const": "arm64"},
+        "native_tested": {"const": true}
+      }
+    },
+    "sdk_input": {
+      "type": "object",
+      "required": [
+        "source_commit",
+        "manager_sha256",
+        "manager_version",
+        "provenance_sha256",
+        "provenance_subject_and_source_verified"
+      ],
+      "properties": {
+        "source_commit": {
+          "const": "05948a3acfbf0a325f06ecfe6057db484f02e5a1"
+        },
+        "manager_sha256": {"$ref": "#/$defs/sha256"},
+        "manager_version": {"type": "string", "minLength": 1},
+        "provenance_sha256": {"$ref": "#/$defs/sha256"},
+        "provenance_subject_and_source_verified": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "engine_source_commit",
+        "engine_sha256",
+        "engine_version",
+        "public_contract_sha256",
+        "bundled_model",
+        "signature_verified"
+      ],
+      "properties": {
+        "engine_source_commit": {"type": "string", "minLength": 40},
+        "engine_sha256": {
+          "const": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825"
+        },
+        "engine_version": {"type": "string", "minLength": 1},
+        "public_contract_sha256": {
+          "const": "a2357ed6c00e3e143d08581590571447e31d24fd0e7d2466d28a211a0515c75e"
+        },
+        "bundled_model": {"const": true},
+        "signature_verified": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "host_inventory": {
+      "type": "object",
+      "required": ["codex", "claude_code", "cursor", "opencode"],
+      "properties": {
+        "codex": {
+          "type": "object",
+          "required": [
+            "status",
+            "detected",
+            "native_cli_acceptance",
+            "acceptance_level"
+          ],
+          "properties": {
+            "status": {"const": "pass"},
+            "detected": {"const": true},
+            "native_cli_acceptance": {"const": true},
+            "acceptance_level": {"const": "native_cli_configuration_only"}
+          },
+          "additionalProperties": false
+        },
+        "claude_code": {"$ref": "#/$defs/heldHost"},
+        "cursor": {"$ref": "#/$defs/heldHost"},
+        "opencode": {"$ref": "#/$defs/heldHost"}
+      },
+      "additionalProperties": false
+    },
+    "tests": {"type": "object"},
+    "contract_sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["url", "claims"],
+        "properties": {
+          "url": {"const": "https://developers.openai.com/codex/mcp"},
+          "claims": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dependency_held": {"type": "object"},
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorized", "release_readiness_claimed"],
+      "properties": {
+        "authorized": {"const": false},
+        "release_readiness_claimed": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "heldHost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "detected",
+        "reason",
+        "native_cli_acceptance",
+        "live_model_acceptance",
+        "ide_acceptance",
+        "host"
+      ],
+      "properties": {
+        "status": {"const": "held"},
+        "detected": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1},
+        "native_cli_acceptance": {"const": false},
+        "live_model_acceptance": {"const": false},
+        "ide_acceptance": {"const": false},
+        "host": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

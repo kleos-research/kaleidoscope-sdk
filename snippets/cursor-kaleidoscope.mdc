@@ -1,0 +1,9 @@
+---
+# >>> kaleidoscope-manager owner=kaleidoscope-manager-v1 instruction=cursor
+description: Apply Kaleidoscope memory policy safely
+alwaysApply: true
+---
+## Kaleidoscope memory
+
+For nontrivial tasks, read and follow `.agents/skills/use-kaleidoscope/SKILL.md` before using Kaleidoscope. Use only the public `search` and `remember` tools for agent work. Retrieve at task start, persist only verified durable semantic deltas, never store secrets or transcripts, and leave the required exposure record. If the skill or authenticated tools are unavailable, continue without inventing memory operations.
+# <<< kaleidoscope-manager owner=kaleidoscope-manager-v1 instruction=cursor
