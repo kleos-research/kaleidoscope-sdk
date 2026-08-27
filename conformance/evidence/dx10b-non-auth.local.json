@@ -1,0 +1,156 @@
+{
+  "candidate": {
+    "bundled_model": true,
+    "engine_source_commit": "d96355632cc52816472106d0776ce63d73631fef",
+    "engine_version": "kscope 0.0.0-proposal",
+    "isolated_distribution_candidate_sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
+    "local_live_candidate_sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
+    "public_contract_executable_sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
+    "public_contract_sha256": "a2357ed6c00e3e143d08581590571447e31d24fd0e7d2466d28a211a0515c75e",
+    "shared_vault_development_runtime_sha256": "9eeae09b2f5912c6ee49a8b6a5d7fd523addad9d0424aee6438804f1a86fc594",
+    "shared_vault_runtime_is_release_candidate": false,
+    "signature_verified": false
+  },
+  "dependency_held": {
+    "live_codex_claude_cursor_opencode_acceptance": "native host runners and pinned host versions",
+    "live_oidc_login_and_native_keychain": "staging issuer credentials and native acceptance runners",
+    "machine_restart": "clean native VM runner",
+    "non_darwin_arm64_platforms": "native platform artifacts and runners",
+    "production_publication": "separate final approval",
+    "signed_install_update_rollback": "DX-06 signing identities and DX-10A installed candidate"
+  },
+  "generated_at": "2026-08-22T05:02:39.539519Z",
+  "platform": {
+    "architecture": "arm64",
+    "native_tested": true,
+    "os": "darwin"
+  },
+  "promotion": {
+    "authorized": false,
+    "release_readiness_claimed": false
+  },
+  "schema_version": "kaleidoscope.dx10b-non-auth-account-offline-local-evidence.v1",
+  "scope": "local-only-non-auth-account-offline",
+  "sdk_inputs": {
+    "auth_manager_commit": "048bf90854a1e38a1b88d14de88b681a206e5790",
+    "integration_foundation_commit": "fd0b1877f70b1bb57e1b67c4c559e8b2e1d44290",
+    "manager_foundation_commit": "3b1ec66d4fc96ff2e77bf7c382b107502ccc7b8d",
+    "manager_sha256": "a058ac7cc36e7f0eda703285f782b0ebd1b744914c781a5e82246783e5324468",
+    "manager_version": "kaleidoscope 0.1.0",
+    "node_version": "v25.6.1",
+    "python_version": "Python 3.13.4"
+  },
+  "tests": {
+    "exact_configuration_rollback": {
+      "status": "pass"
+    },
+    "friendly_init_and_profile": {
+      "status": "pass"
+    },
+    "generic_harness_restart_and_teardown": {
+      "status": "pass"
+    },
+    "host_configuration": {
+      "hosts": {
+        "claude-code": {
+          "connect_idempotent": true,
+          "disconnect_exact_rollback": true,
+          "dry_run_no_write": true,
+          "profile_first": true
+        },
+        "codex": {
+          "connect_idempotent": true,
+          "disconnect_exact_rollback": true,
+          "dry_run_no_write": true,
+          "profile_first": true
+        },
+        "cursor": {
+          "connect_idempotent": true,
+          "disconnect_exact_rollback": true,
+          "dry_run_no_write": true,
+          "profile_first": true
+        },
+        "opencode": {
+          "connect_idempotent": true,
+          "disconnect_exact_rollback": true,
+          "dry_run_no_write": true,
+          "profile_first": true
+        }
+      },
+      "status": "pass"
+    },
+    "instructions": {
+      "status": "pass",
+      "targets": {
+        "agents": {
+          "dry_run_no_write": true,
+          "install_idempotent": true,
+          "remove_exact_rollback": true
+        },
+        "claude": {
+          "dry_run_no_write": true,
+          "install_idempotent": true,
+          "remove_exact_rollback": true
+        },
+        "cursor": {
+          "dry_run_no_write": true,
+          "install_idempotent": true,
+          "remove_exact_rollback": true
+        },
+        "skill": {
+          "dry_run_no_write": true,
+          "install_idempotent": true,
+          "remove_exact_rollback": true
+        }
+      }
+    },
+    "manager_account_offline": {
+      "closed_command_count": 11,
+      "engine_or_mcp_arguments_present": false,
+      "live_oidc_credentials_required": false,
+      "profile_and_vault_unchanged": true,
+      "provider_not_configured_fail_closed": true,
+      "python_signed_out_status": true,
+      "real_keychain_write_required": false,
+      "status": "pass",
+      "typescript_signed_out_status": true
+    },
+    "offline_doctor": {
+      "network_calls": 0,
+      "redacted": true,
+      "status": "pass"
+    },
+    "python_generic_mcp": {
+      "calls": 5,
+      "processes_distinct": true,
+      "restart_persisted": true,
+      "sessions": 2,
+      "status": "pass",
+      "teardown": true,
+      "tools": [
+        "search",
+        "remember"
+      ]
+    },
+    "runtime_privacy": {
+      "canaries_absent": true,
+      "raw_coordinates_absent_from_public_surfaces": true,
+      "status": "pass"
+    },
+    "source_poison": {
+      "status": "pass"
+    },
+    "typescript_generic_mcp": {
+      "calls": 3,
+      "processes_distinct": true,
+      "restart_persisted": true,
+      "sessions": 2,
+      "status": "pass",
+      "teardown": true,
+      "tools": [
+        "search",
+        "remember"
+      ]
+    }
+  }
+}

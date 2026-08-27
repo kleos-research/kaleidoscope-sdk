@@ -1,6 +1,6 @@
 ---
 name: use-kaleidoscope
-description: Use Kaleidoscope's local memory to retrieve relevant prior context and persist verified durable decisions, preferences, constraints, corrections, procedures, relationships, and outcomes during nontrivial tasks.
+description: Kaleidoscope is a local memory store, read and written through its only two tools, `search` and `remember`, so a task starts from prior context instead of rediscovering it. Use this skill at the start of any nontrivial task in a project that has Kaleidoscope connected; after the user states a preference, accepts a decision, sets a constraint, or corrects an earlier claim; after a milestone is verified by a test or another observable result; and whenever the user asks to remember, forget, revise, retrieve, connect, or apply earlier context. Use it also when a Kaleidoscope call is refused, or when neither tool appears in the tool list — it says what to do instead of proceeding as though the project had no memory.
 ---
 
 # Use Kaleidoscope
@@ -9,14 +9,16 @@ Use the connected local Kaleidoscope MCP server as a compact continuity layer. I
 
 ## Public boundary
 
-The agent-facing server publishes exactly two tools: `search` and `remember`.
+The agent-facing server publishes exactly two tools: `search` and `remember`. There is no third, and a name outside that pair is refused rather than translated into one of them.
 
 - Use `search` for ranked retrieval at task start or an addressed read when the tool schema supports one.
 - Use `remember` to create or correct a verified durable semantic delta.
 - Do not attempt controller-only operations through MCP. The public search response does not expose the authenticated attribution handle those operations would require.
 - Do not construct direct vault-coordinate commands. The selected native profile owns the root, workspace, principal, and journal coordinates outside host configuration.
 
-If the tools are unavailable or unauthenticated, continue the user's task without fabricating memory operations.
+`search` and `remember` are the names on the wire. Your harness may expose them under a prefix — Claude Code, for one, qualifies every tool with the server it came from — so match the string your own tool list actually shows rather than copying either form out of this file. `kscope schema` prints the two agent verbs, and `kscope public-contract` names the operations that used to be tools and are now refusals; check there before believing any document, this one included.
+
+If the tools are unavailable or unauthenticated, continue the user's task without fabricating memory operations, and say that memory was unreachable so a broken connection gets repaired rather than absorbed.
 
 ## Retrieve
 

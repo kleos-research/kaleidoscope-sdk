@@ -269,8 +269,8 @@ def test_the_sync_bridge_joins_its_thread(fake_binary: Path) -> None:
 
     with KaleidoscopeMemory(binary=fake_binary, profile=f"thread{_nonce()}") as memory:
         during = set(threading.enumerate()) - before
-        assert any(t.name == "kaleidoscope-memory" for t in during), "no owner thread"
-        assert all(not t.daemon for t in during if t.name == "kaleidoscope-memory")
+        assert any(t.name == "kscope-memory" for t in during), "no owner thread"
+        assert all(not t.daemon for t in during if t.name == "kscope-memory")
         memory.search("keep it busy")
 
     for _ in range(50):

@@ -513,11 +513,17 @@ PUBLIC_KALEIDOSCOPE_FIRST_WORDS = frozenset(
         "instruction",  # -instruction-owner instruction receipt marker
         "lock",  # -lock              file-lock suffix
         "manager",  # -manager[-v1]      this crate, and its schema id
-        "memory",  # -memory[-native-*] the Python package, native packages
+        "memory",  # -memory-native-*   the withdrawn native companion. The
+        #                    Python distribution is `kscope-memory` now, so this
+        #                    entry covers only the historical name.
         "native",  # -native-fixture    test fixture prefix
         "owner",  # -owner[.json]      host ownership receipt
+        "preflight",  # -preflight-<pid>-<n> writability probe this crate creates
         "potion",  # -potion-base-*     the PUBLIC embedding schema id
         "public",  # -public-contract   the tracked contract golden
+        "session",  # -session-start-probe the MCP client name the session-start
+        #                    hook uses, and kaleidoscope_session_start, the field
+        #                    it emits; both are this crate's own public names
         "sdk",  # -sdk[.git]         this repository
         "specific",  # -specific         ordinary English, in SDK prose
         "vault",  # -vault             documented CLI vocabulary

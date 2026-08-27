@@ -10,6 +10,51 @@ use crate::error::{ManagerError, Result};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// What a plan does to the bytes of its target.
+///
+/// A third state exists because two are not enough. Every plan used to carry
+/// `updated: Option<Vec<u8>>`, where `Some` meant write and `None` meant
+/// **unlink** -- so a plan that wanted to say "this file is fine as it is,
+/// touch nothing" had no way to say it, and the nearest available value would
+/// have DELETED the user's file. Adoption (`host.rs`, `instructions.rs`,
+/// `hooks.rs`) needs exactly that third state: it takes ownership of content it
+/// did not write, and taking ownership must not be a write.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TargetWrite {
+    /// Write these bytes to the target.
+    Write(Vec<u8>),
+    /// Unlink the target.
+    Remove,
+    /// Touch nothing. The manager did not write these bytes and is not
+    /// entitled to rewrite or delete them.
+    Leave,
+}
+
+impl TargetWrite {
+    /// The bytes this plan leaves on disk, given what is there now.
+    ///
+    /// `Leave` answers with the ORIGINAL, which is the whole point: the file
+    /// after the plan is the file before it.
+    #[must_use]
+    pub fn resulting_bytes<'a>(&'a self, original: Option<&'a [u8]>) -> Option<&'a [u8]> {
+        match self {
+            Self::Write(bytes) => Some(bytes),
+            Self::Remove => None,
+            Self::Leave => original,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_remove(&self) -> bool {
+        matches!(self, Self::Remove)
+    }
+
+    #[must_use]
+    pub const fn is_leave(&self) -> bool {
+        matches!(self, Self::Leave)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Snapshot {
     pub bytes: Option<Vec<u8>>,
@@ -332,6 +377,60 @@ pub fn restore_snapshot(path: &Path, snapshot: &Snapshot) -> Result<()> {
     match snapshot.bytes.as_deref() {
         Some(bytes) => atomic_write(path, bytes, snapshot.unix_mode),
         None => atomic_remove(path),
+    }
+}
+
+/// Prove the target is writable BEFORE any plan in this invocation is applied.
+///
+/// Planning already fails atomically for a whole host -- every plan is built
+/// and an error returns before the first `apply` -- but planning only READS.
+/// Once user scope became the default, one `init` writes into two directory
+/// trees, and a permission failure in the second left the first applied:
+/// measured, the read-only-project scenario went from "rc=2, nothing written"
+/// to "rc=2, the home-side MCP entry written". "Nothing was changed" has to
+/// stay true across a two-tree write, and this is the only thing that keeps it
+/// true.
+///
+/// It uses the real permission check -- create a file, remove it -- rather than
+/// inspecting mode bits, because mode bits are wrong under ACLs, on read-only
+/// mounts and for a root-owned parent.
+pub fn assert_writable(target: &Path) -> Result<()> {
+    validate_absolute_path(target, "configuration file")?;
+    let parent = target.parent().ok_or(ManagerError::UnsafePath {
+        target: "configuration file",
+        reason: "path has no parent",
+    })?;
+    // A parent that does not exist yet is not a failure: `ensure_parent_
+    // directory` creates it at apply time, and creating it here would be a
+    // side effect from a function whose whole promise is that it has none.
+    // Walk up to the nearest existing ancestor and test THAT, which is the
+    // directory the creation will actually have to happen in.
+    let mut existing = parent;
+    while !existing.exists() {
+        match existing.parent() {
+            Some(next) => existing = next,
+            None => break,
+        }
+    }
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let probe = existing.join(format!(
+        ".kaleidoscope-preflight-{}-{sequence}",
+        std::process::id()
+    ));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    match options.open(&probe) {
+        Ok(file) => {
+            drop(file);
+            let _ = fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(error) => Err(ManagerError::io("verify target is writable", error)),
     }
 }
 

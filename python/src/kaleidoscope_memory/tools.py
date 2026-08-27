@@ -183,7 +183,7 @@ def _assert_mcp_pin(binding: str) -> None:
                 f"{installed} is installed, so the {binding} tool binding would "
                 f"fail inside the framework rather than here. Install exactly one "
                 f"framework extra per environment: "
-                f"pip install 'kaleidoscope-memory[{extra}]'"
+                f"pip install 'kscope-memory[{extra}]'"
             )
 
 
@@ -303,7 +303,7 @@ class KaleidoscopeMemory:
             loop.call_soon(ready.set)
             loop.run_forever()
 
-        thread = threading.Thread(target=run, name="kaleidoscope-memory", daemon=False)
+        thread = threading.Thread(target=run, name="kscope-memory", daemon=False)
         thread.start()
         if not ready.wait(timeout=10.0):  # pragma: no cover - a wedged interpreter
             loop.call_soon_threadsafe(loop.stop)

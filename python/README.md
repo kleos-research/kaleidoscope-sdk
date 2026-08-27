@@ -1,30 +1,40 @@
 # Kaleidoscope for Python
 
-`kaleidoscope-memory` is the public Python client and command package for
-Kaleidoscope. The pure-Python wheel contains process/MCP helpers and console
-launchers. A platform wheel contains the public manager and proprietary
-`kscope` engine as object code; no engine source or compiler is required.
+`kscope-memory` is the public Python client for Kaleidoscope. It contains
+process and MCP helpers and console launchers, and nothing else: no memory
+engine, no vault, no second memory implementation, and no installer.
 
-The first release candidate supports only the natively exercised macOS arm64
-coordinate. Installation remains protected and unpublished until the legal,
-signing, registry, and promotion gates are approved.
+The engine is a separate install. Get the `kscope` and `kaleidoscope` commands
+first, then add the Python client:
 
 ```sh
-python -m pip install kaleidoscope-memory
-kaleidoscope --version
+npm install -g @kleos-research/kaleidoscope
 kscope --version
+
+python -m pip install kscope-memory
 ```
+
+The client finds the installed commands at run time. It looks, in order, at a
+path you pass it, then at `KALEIDOSCOPE_ENGINE` (`KALEIDOSCOPE_MANAGER` for the
+manager), then beside the Python you are running, then on `PATH`. If it finds
+nothing it says so, says everywhere it looked, and gives you the command above.
 
 ```python
 from kaleidoscope_memory import (
-    installed_payload_paths,
     load_launch_descriptor,
+    locate_engine,
     mcp_stdio_config,
 )
 
-engine = installed_payload_paths().engine
+engine = locate_engine().path
 descriptor = load_launch_descriptor(engine, "default")
 mcp = mcp_stdio_config(descriptor)
+```
+
+An explicit path always wins, for a pinned deployment:
+
+```python
+descriptor = load_launch_descriptor("/opt/kaleidoscope/bin/kscope", "default")
 ```
 
 Explicit executable paths and SHA-256 pins remain available for controllers.
@@ -37,9 +47,9 @@ Apache-2.0. See LICENSE for the terms and NOTICE for the copyright line that
 Section 4(d) requires downstream redistributors to carry forward.
 
 That licence covers this package's own source. It does not cover the `kscope`
-memory engine or any other proprietary object-code payload delivered inside a
-platform package; those are closed source, are not part of this repository, and
-are not licensed by this repository at all — separate terms apply to them.
+memory engine, which you install separately: it is closed source, is not part
+of this repository, is not shipped inside this package, and is not licensed by
+this repository at all — separate terms apply to it.
 The engine carries the third-party attribution it has inside the executable, and
 states in that same output which attribution is not embedded yet:
 

@@ -33,6 +33,7 @@ struct Fixture {
 }
 
 impl Fixture {
+    #[allow(clippy::too_many_lines)]
     fn new(invalid_descriptor: bool) -> Self {
         let temp = TempDir::new().unwrap();
         let canonical_temp = fs::canonicalize(temp.path()).unwrap();
@@ -92,6 +93,23 @@ case "$1" in
     ;;
   public-contract)
     printf '%s\n' '{{"schema_version":"kaleidoscope.public-seed.v1","capabilities":{{"network_required":false,"local_vault":true,"stdio_mcp":true,"operator_commands_in_mcp":false}}}}'
+    ;;
+  where)
+    # `where --root-only` is the contract the manager asks for the project
+    # root. It answers with the WORKING DIRECTORY, which is what the manager
+    # used to assume unconditionally -- so every test whose subject is
+    # something else keeps its old expectations, and the tests whose subject
+    # IS the walk drive it through the real engine instead.
+    #
+    # `--root-only` and nothing else: `where` on its own still resolves a full
+    # vault address, and the manager must not be able to reach that path.
+    if [ "$2" = "--root-only" ]; then
+      here=$(pwd)
+      printf '%s\n' '{{"root":"'"$here"'/.kaleidoscope","source":"working_directory_default","repository":null,"project":"'"$here"'","project_source":"working_directory_default","project_marker":null}}'
+    else
+      printf '%s\n' 'where requires a vault' >&2
+      exit 2
+    fi
     ;;
   init-profile)
     # The real engine does NOT refuse here: it happily adds a second
@@ -157,6 +175,29 @@ esac
         );
         fs::write(&engine, script).unwrap();
         fs::set_permissions(&engine, fs::Permissions::from_mode(0o700)).unwrap();
+        // WARM THE FIRST EXECUTION, before any test times anything.
+        //
+        // The FIRST exec of a freshly written executable on macOS goes through
+        // a serialized system policy assessment: measured at ~620 ms on an idle
+        // machine, and far worse with a dozen fixtures doing it at once. Every
+        // subsequent exec of the same file is ~6 ms.
+        //
+        // That cost is invisible to a test that only checks output, and it was
+        // invisible here until the `SessionStart` hook grew a timeout -- at
+        // which point the suite began reporting `profile_launch: "timed out
+        // after 3001 ms"` for an engine that answers in six milliseconds, under
+        // parallel load only. The measurement being made is the manager's
+        // behaviour, not macOS's code-signing throughput, so the cost is paid
+        // here, once, outside anybody's budget.
+        //
+        // The warm-up's own log entry is DELETED again immediately. Several
+        // tests walk every entry in this log and assert that each carries
+        // `KSCOPE_PROFILE_HOME` and none carries a canary, so a warm-up entry
+        // written with any environment at all -- inherited or cleared -- fails
+        // one of those two. Removing the file restores exactly the state before
+        // the warm-up, which is "no log yet".
+        let _ = Command::new(&engine).arg("--version").output();
+        let _ = fs::remove_file(&log);
         Self {
             temp,
             engine,
@@ -170,6 +211,15 @@ esac
     }
 
     fn command(&self, arguments: &[&str]) -> Output {
+        self.command_with(&[], arguments)
+    }
+
+    /// The same invocation with EXTRA environment variables.
+    ///
+    /// A separate child process per case, deliberately: `std::env::set_var` is
+    /// process-global and this crate forbids `unsafe`, so a config-directory
+    /// override can only be tested through a spawn.
+    fn command_with(&self, extra: &[(&str, &std::path::Path)], arguments: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_kaleidoscope"));
         command
             .env_clear()
@@ -184,6 +234,34 @@ esac
         for (name, value) in CANARIES {
             command.env(name, value);
         }
+        for (name, value) in extra {
+            command.env(name, value);
+        }
+        command.output().unwrap()
+    }
+
+    /// `command`, but standing where a SESSION stands and with stdin closed.
+    ///
+    /// The `SessionStart` hook resolves the project from its working directory
+    /// when the harness sends it no input, so a hook test that inherits cargo's
+    /// working directory reads the DEVELOPER's real `.mcp.json` and reports on
+    /// whatever engine that names. Closing stdin matters for the same class of
+    /// reason: inherited from the test harness it is not a tty, but it is also
+    /// never written to, and the hook would spend its stdin budget waiting.
+    fn hook(&self, arguments: &[&str]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_kaleidoscope"));
+        command
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("KALEIDOSCOPE_USER_HOME", &self.home)
+            .env("KALEIDOSCOPE_CONFIG_HOME", &self.config_home)
+            .env("KALEIDOSCOPE_DATA_HOME", &self.data_home)
+            .env("KSCOPE_PROFILE_HOME", &self.profile_home)
+            .current_dir(&self.project)
+            .stdin(std::process::Stdio::null())
+            .arg("--engine")
+            .arg(&self.engine)
+            .args(arguments);
         command.output().unwrap()
     }
 
@@ -204,6 +282,56 @@ esac
             format!("{}\n{durability}\n", root.display()),
         )
         .unwrap();
+    }
+
+    /// A fingerprint of the whole world -- home and project -- so "the refusal
+    /// wrote nothing" is checkable rather than assumed. The manager's own state
+    /// directory is excluded: it holds the profile and the vault, which a
+    /// refusal in a LATER step does not roll back and is not supposed to.
+    fn tree_digest(&self) -> String {
+        let mut hasher = Sha256::new();
+        for root in [&self.home, &self.project] {
+            let mut entries: Vec<PathBuf> = Vec::new();
+            let mut stack = vec![root.clone()];
+            while let Some(directory) = stack.pop() {
+                let Ok(children) = fs::read_dir(&directory) else {
+                    continue;
+                };
+                for child in children.flatten() {
+                    let path = child.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        entries.push(path);
+                    }
+                }
+            }
+            entries.sort();
+            for path in entries {
+                hasher.update(path.to_string_lossy().as_bytes());
+                hasher.update(fs::read(&path).unwrap_or_default());
+            }
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Make the fake engine WALK for `where --root-only` instead of answering
+    /// with the working directory.
+    ///
+    /// Rewritten IN PLACE rather than chained through a wrapper script: the
+    /// launch descriptor the engine emits names its own absolute path, and the
+    /// manager validates that against the executable it actually ran, so a
+    /// wrapper produces "closed version-1 shape mismatch" and the test fails on
+    /// the wrong thing.
+    fn make_the_engine_walk(&self) {
+        let script = fs::read_to_string(&self.engine).unwrap();
+        let walked = script.replace(
+            "      here=$(pwd)\n",
+            "      here=$(pwd)\n      while [ \"$here\" != / ]; do\n        [ -f \"$here/CLAUDE.md\" ] && break\n        here=$(dirname \"$here\")\n      done\n",
+        );
+        assert_ne!(walked, script, "the where arm moved; this rewrite is stale");
+        fs::write(&self.engine, walked).unwrap();
+        fs::set_permissions(&self.engine, fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     fn success(&self, arguments: &[&str]) -> Output {
@@ -234,7 +362,11 @@ fn fake_engine_full_manager_flow_is_redacted_and_uses_closed_environment() {
     fixture.success(&["profile", "use", "default"]);
     // Remove a throwaway profile, not the one the rest of this test uses: the
     // fake engine now keeps a real registry, so `remove` really removes.
-    fixture.register("scratch", &fixture.temp.path().join("scratch-vault"), "process-local");
+    fixture.register(
+        "scratch",
+        &fixture.temp.path().join("scratch-vault"),
+        "process-local",
+    );
     fixture.success(&["profile", "remove", "scratch"]);
     fixture.success(&["profile", "use", "default"]);
     let config = fixture.success(&["config", "--profile", "default", "--json"]);
@@ -251,11 +383,15 @@ fn fake_engine_full_manager_flow_is_redacted_and_uses_closed_environment() {
     );
     assert_eq!(descriptor["environment"], serde_json::json!({}));
 
+    // `--scope project` is now EXPLICIT here. User scope became the default,
+    // and every assertion below reads a file in `fixture.project`.
     let dry_run = fixture.success(&[
         "connect",
         "codex",
         "--profile",
         "default",
+        "--scope",
+        "project",
         "--project",
         fixture.project.to_str().unwrap(),
         "--dry-run",
@@ -271,6 +407,8 @@ fn fake_engine_full_manager_flow_is_redacted_and_uses_closed_environment() {
             host,
             "--profile",
             "default",
+            "--scope",
+            "project",
             "--project",
             fixture.project.to_str().unwrap(),
             "--yes",
@@ -616,14 +754,12 @@ fn shell_quote(value: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn workspace_count(root: &std::path::Path) -> usize {
-    fs::read_dir(root.join("workspaces"))
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| entry.file_name().to_string_lossy().starts_with("wsp_"))
-                .count()
-        })
-        .unwrap_or(0)
+    fs::read_dir(root.join("workspaces")).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("wsp_"))
+            .count()
+    })
 }
 
 /// T-B1. The falsifier is not the exit code: it is that a real vault appears at
@@ -655,7 +791,13 @@ fn init_on_a_clean_tree_creates_exactly_one_workspace() {
 fn init_on_an_existing_vault_adopts_and_does_not_fork_it() {
     let fixture = Fixture::new(false);
     let root = fixture.temp.path().join("existing-vault");
-    fixture.success(&["init", "--root", root.to_str().unwrap(), "--profile", "first"]);
+    fixture.success(&[
+        "init",
+        "--root",
+        root.to_str().unwrap(),
+        "--profile",
+        "first",
+    ]);
     let before = workspace_count(&root);
     assert_eq!(before, 1, "the seed vault must start with one workspace");
 
@@ -735,8 +877,20 @@ fn several_candidates_refuse_and_list_every_one_of_them() {
     let fixture = Fixture::new(false);
     let alpha = fixture.temp.path().join("alpha-vault");
     let beta = fixture.temp.path().join("beta-vault");
-    fixture.success(&["init", "--root", alpha.to_str().unwrap(), "--profile", "alpha"]);
-    fixture.success(&["init", "--root", beta.to_str().unwrap(), "--profile", "beta"]);
+    fixture.success(&[
+        "init",
+        "--root",
+        alpha.to_str().unwrap(),
+        "--profile",
+        "alpha",
+    ]);
+    fixture.success(&[
+        "init",
+        "--root",
+        beta.to_str().unwrap(),
+        "--profile",
+        "beta",
+    ]);
 
     let output = fixture.command(&["init", "--profile", "third"]);
     assert!(!output.status.success(), "several candidates must refuse");
@@ -763,7 +917,13 @@ fn several_candidates_refuse_and_list_every_one_of_them() {
 fn create_over_an_existing_vault_refuses_even_when_explicitly_asked() {
     let fixture = Fixture::new(false);
     let root = fixture.temp.path().join("guarded-vault");
-    fixture.success(&["init", "--root", root.to_str().unwrap(), "--profile", "first"]);
+    fixture.success(&[
+        "init",
+        "--root",
+        root.to_str().unwrap(),
+        "--profile",
+        "first",
+    ]);
     let before = workspace_count(&root);
 
     let output = fixture.command(&[
@@ -854,6 +1014,7 @@ fn tree_digest_map(directory: &std::path::Path) -> std::collections::BTreeMap<St
 /// it left behind rather than by its own report. The "vault untouched" half
 /// stops a teardown that helpfully deleted data.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn init_wires_a_harness_and_teardown_reverses_every_byte_of_it() {
     let fixture = Fixture::new(false);
     let root = fixture.temp.path().join("wired-vault");
@@ -862,7 +1023,11 @@ fn init_wires_a_harness_and_teardown_reverses_every_byte_of_it() {
     // Pre-existing, user-authored files with awkward formatting: keys out of
     // alphabetical order and four-space indentation, which is exactly what the
     // old reserialising path destroyed.
-    fs::write(project.join("CLAUDE.md"), "# My project\n\nNotes without a trailing newline").unwrap();
+    fs::write(
+        project.join("CLAUDE.md"),
+        "# My project\n\nNotes without a trailing newline",
+    )
+    .unwrap();
     fs::write(
         project.join(".mcp.json"),
         "{\n    \"mcpServers\": {\n        \"my-own-server\": {\n            \"command\": \"zzz\",\n            \"args\": []\n        }\n    }\n}\n",
@@ -905,9 +1070,14 @@ fn init_wires_a_harness_and_teardown_reverses_every_byte_of_it() {
     // block installed for the same host names that same path. Two artefacts
     // cross-checked against each other -- they disagreed before this change.
     let skill = project.join(".claude/skills/use-kaleidoscope/SKILL.md");
-    assert!(skill.exists(), "the skill is not where Claude Code reads it");
     assert!(
-        !project.join(".agents/skills/use-kaleidoscope/SKILL.md").exists(),
+        skill.exists(),
+        "the skill is not where Claude Code reads it"
+    );
+    assert!(
+        !project
+            .join(".agents/skills/use-kaleidoscope/SKILL.md")
+            .exists(),
         "the skill was also written where Claude Code does not read it"
     );
     let claude_md = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
@@ -928,7 +1098,10 @@ fn init_wires_a_harness_and_teardown_reverses_every_byte_of_it() {
     let settings: Value =
         serde_json::from_slice(&fs::read(project.join(".claude/settings.json")).unwrap()).unwrap();
     assert_eq!(settings["theme"], "dark", "the user's settings were lost");
-    assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        settings["hooks"]["SessionStart"].as_array().unwrap().len(),
+        1
+    );
     assert!(
         !project.join(".claude/settings.local.json").exists(),
         "the hook was written into the personal, gitignored file"
@@ -987,6 +1160,8 @@ fn agents_md_is_installed_once_for_codex_and_opencode_together() {
         "codex",
         "--host",
         "opencode",
+        "--scope",
+        "project",
         "--project",
         project.to_str().unwrap(),
         "--yes",
@@ -1051,18 +1226,33 @@ fn agents_md_is_installed_once_for_codex_and_opencode_together() {
     let teardown: Value = serde_json::from_slice(&teardown.stdout).unwrap();
     assert_eq!(teardown["status"], "removed", "{teardown}");
     assert!(!project.join("AGENTS.md").exists());
-    assert!(!project.join(".agents").exists(), "an emptied managed directory survived");
+    assert!(
+        !project.join(".agents").exists(),
+        "an emptied managed directory survived"
+    );
 }
 
 /// T-B22: RUN the hook, exactly as the settings file spells it. A hook entry
 /// written into a settings file that nothing executes is the unwired-mitigation
 /// defect, and only invoking it can tell the difference.
 ///
-/// T-B24 rides along: the engine log is inspected for any gated invocation
-/// (`mcp`, `context`, `call`, `serve`). Recorded from inside the child, not
-/// inferred from the absence of an error.
+/// T-B24 rides along, and its subject CHANGED. It used to assert the hook made
+/// no gated engine call at all (`mcp`, `context`, `call`, `serve`). The hook now
+/// deliberately makes two of those, because the alternative was the defect this
+/// change exists to fix: it speaks MCP to the registered server rather than
+/// asserting "connected" without checking, and it retrieves memories rather
+/// than emitting a reminder to go and get some.
+///
+/// So the property under test is now the narrower and more useful one:
+///
+///  * the probe REALLY RAN -- `ARGS <mcp>` is in the log, recorded by the child
+///    itself, which is what separates a wired probe from a printed claim;
+///  * the hook never WRITES -- no `remember` reaches the engine, from a hook
+///    that fires on every startup, resume, clear and compact;
+///  * `serve` is never invoked, because a session start must not leave a
+///    long-lived server behind it.
 #[test]
-fn the_installed_hook_actually_fires_and_makes_no_gated_engine_call() {
+fn the_installed_hook_actually_fires_and_probes_but_never_writes() {
     let fixture = Fixture::new(false);
     let root = fixture.temp.path().join("hook-vault");
     let project = &fixture.project;
@@ -1072,6 +1262,8 @@ fn the_installed_hook_actually_fires_and_makes_no_gated_engine_call() {
         root.to_str().unwrap(),
         "--host",
         "claude-code",
+        "--scope",
+        "project",
         "--project",
         project.to_str().unwrap(),
         "--yes",
@@ -1096,6 +1288,12 @@ fn the_installed_hook_actually_fires_and_makes_no_gated_engine_call() {
         .env("KALEIDOSCOPE_DATA_HOME", &fixture.data_home)
         .env("KSCOPE_PROFILE_HOME", &fixture.profile_home)
         .env("KALEIDOSCOPE_ENGINE", &fixture.engine)
+        // The SESSION's directory, not the test harness's. Without this the
+        // hook falls back to the cargo working directory and reads the
+        // DEVELOPER's real `.mcp.json` -- which it did, and reported on a
+        // stale engine from another test's deleted temporary directory.
+        .current_dir(project)
+        .stdin(std::process::Stdio::null())
         .args(&parts[1..]);
     let output = invocation.output().unwrap();
 
@@ -1121,29 +1319,52 @@ fn the_installed_hook_actually_fires_and_makes_no_gated_engine_call() {
     assert!(!context.is_empty());
     assert!(
         context.contains("search") && context.contains("remember"),
-        "the reminder must name the public tools: {context}"
+        "the context must name the public tools: {context}"
+    );
+    // The machine-readable verdict, on the first line, is the whole point of
+    // item 3: a later session is audited against it rather than believing a
+    // sentence.
+    let facts: Value = serde_json::from_str(context.lines().next().unwrap())
+        .expect("the first line of the context must be the machine-readable verdict");
+    assert!(
+        facts["tools_visible"].is_boolean(),
+        "no tools_visible in {facts}"
+    );
+    assert_eq!(
+        facts["registration"]["source"],
+        Value::String(project.join(".mcp.json").display().to_string()),
+        "the probe reported on the wrong registration: {facts}"
     );
 
-    // T-B24: no gated command. Recorded by the child itself.
     let log = fs::read_to_string(&fixture.log).unwrap();
     assert!(
         log.contains("ARGS <profile> <launch>"),
         "the hook made no engine call at all, so this test proves nothing: {log}"
     );
-    for gated in ["ARGS <mcp>", "ARGS <context>", "ARGS <call>", "ARGS <serve>"] {
+    assert!(
+        log.contains("ARGS <mcp>"),
+        "the MCP probe never ran, so the verdict is a claim rather than a measurement: {log}"
+    );
+    // The hook reads. It must never write, and it must never leave a server
+    // running behind a session start.
+    for forbidden in ["<remember>", "ARGS <serve>"] {
         assert!(
-            !log.contains(gated),
-            "the hook made a GATED engine call: {gated}"
+            !log.contains(forbidden),
+            "the hook invoked {forbidden}: {log}"
         );
     }
 }
 
 /// T-B23. Both halves: an exit-0-with-empty-output implementation fails the
 /// content assertion, an exit-1 implementation fails the code assertion.
+///
+/// Asserted on the machine-readable field rather than on a phrase, so the
+/// wording of the prose can change without this test either breaking or --
+/// worse -- passing on a sentence that no longer says the profile is broken.
 #[test]
 fn the_hook_reports_a_broken_profile_instead_of_failing() {
     let fixture = Fixture::new(false);
-    let output = fixture.command(&["hook", "session-start", "--profile", "nonexistent"]);
+    let output = fixture.hook(&["hook", "session-start", "--profile", "nonexistent"]);
     assert!(
         output.status.success(),
         "a hook that exits non-zero is a hook the user turns off"
@@ -1152,11 +1373,94 @@ fn the_hook_reports_a_broken_profile_instead_of_failing() {
     let context = emitted["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
+    let facts: Value = serde_json::from_str(context.lines().next().unwrap()).unwrap();
+    assert_ne!(
+        facts["profile_launch"],
+        Value::String("ok".to_owned()),
+        "a broken profile must be NAMED, not swallowed: {facts}"
+    );
     assert!(
-        context.contains("not usable") || context.contains("could not"),
-        "a broken profile must be NAMED, not swallowed: {context}"
+        facts["profile_launch"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("not registered") || detail.contains("refused")),
+        "the engine's own reason must travel: {facts}"
     );
     assert!(context.contains("doctor"), "{context}");
+}
+
+/// THE constraint on this hook. Every stage fails at once -- no engine, no
+/// registration, no project, no vault -- and the hook still exits 0 and still
+/// emits a parseable, non-empty verdict.
+///
+/// It exists because `run_hook` used to return `Err` for a mis-parsed
+/// `--profile` and for any unrecognised argument, and `main` turns `Err` into
+/// exit 2. One typo in the settings entry was the difference between a hook
+/// that reports a problem and a hook the harness reports as broken -- which is
+/// a hook the user turns off, taking the working memory with it.
+#[test]
+fn the_hook_exits_zero_when_every_stage_fails() {
+    let fixture = Fixture::new(false);
+    let empty = fixture.temp.path().join("no-project-here");
+    fs::create_dir_all(&empty).unwrap();
+    for arguments in [
+        // The ordinary shape, with nothing behind it.
+        vec!["hook", "session-start", "--profile", "default"],
+        // `--profile` with no value: a parse error that used to be exit 2.
+        vec!["hook", "session-start", "--profile"],
+        // An argument nothing recognises: also exit 2, previously.
+        vec![
+            "hook",
+            "session-start",
+            "--profile",
+            "default",
+            "--nonsense",
+        ],
+        // No profile at all.
+        vec!["hook", "session-start"],
+        // Retrieval explicitly off, so the no-write path is covered too.
+        vec!["hook", "session-start", "--no-memories"],
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_kaleidoscope"));
+        command
+            .env_clear()
+            .env("HOME", &empty)
+            .env("KALEIDOSCOPE_USER_HOME", &empty)
+            .env("KALEIDOSCOPE_CONFIG_HOME", &empty)
+            .env("KSCOPE_PROFILE_HOME", &empty)
+            .env("KALEIDOSCOPE_ENGINE", empty.join("no-such-engine"))
+            .current_dir(&empty)
+            .stdin(std::process::Stdio::null())
+            .args(&arguments);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "`{}` exited {:?}: {}",
+            arguments.join(" "),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let emitted: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "`{}` emitted unparseable stdout ({error}): {}",
+                arguments.join(" "),
+                String::from_utf8_lossy(&output.stdout)
+            )
+        });
+        let context = emitted["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .expect("additionalContext must be a string on every failure path");
+        let facts: Value = serde_json::from_str(context.lines().next().unwrap())
+            .expect("the verdict must survive every failure path");
+        assert_eq!(
+            facts["tools_visible"],
+            Value::Bool(false),
+            "nothing is reachable here: {facts}"
+        );
+        assert!(
+            context.contains("kscope"),
+            "the fallback must still be named: {context}"
+        );
+    }
 }
 
 /// T-B9. All four hosts x both scopes, each with a pre-existing user-authored
@@ -1262,8 +1566,7 @@ fn hook_absence_is_attempted_and_recorded_for_every_harness() {
         let how = row
             .split('|')
             .map(str::trim)
-            .filter(|cell| !cell.is_empty())
-            .next_back()
+            .rfind(|cell| !cell.is_empty())
             .unwrap_or_default();
         assert!(
             how.len() > 60,
@@ -1485,7 +1788,10 @@ fn force_unwedges_every_marker_state_that_used_to_be_permanent() {
     let mutations: [(&str, fn(&str) -> String); 3] = [
         ("the block appears twice", |text| format!("{text}{text}")),
         ("the start marker was retyped", |text| {
-            text.replace(">>> kaleidoscope-manager owner=kaleidoscope-manager-v1 instruction=claude", ">>> kaleidoscope-manager owner=kaleidoscope-manager-v1 instruction=CLAUDE")
+            text.replace(
+                ">>> kaleidoscope-manager owner=kaleidoscope-manager-v1 instruction=claude",
+                ">>> kaleidoscope-manager owner=kaleidoscope-manager-v1 instruction=CLAUDE",
+            )
         }),
         ("the closing marker was deleted", |text| {
             let kept: Vec<&str> = text
@@ -1541,13 +1847,19 @@ fn force_unwedges_every_marker_state_that_used_to_be_permanent() {
             "--yes",
             "--force",
         ]);
-        assert!(forced.status.success(), "{label}: --force failed: {}", String::from_utf8_lossy(&forced.stderr));
+        assert!(
+            forced.status.success(),
+            "{label}: --force failed: {}",
+            String::from_utf8_lossy(&forced.stderr)
+        );
         let forced: Value = serde_json::from_slice(&forced.stdout).unwrap();
         // What was removed is DISCLOSED, not silently dropped.
         assert_eq!(forced["ownership"], "forced", "{label}: {forced}");
         assert_eq!(forced["discarded_user_edits"], true, "{label}: {forced}");
         assert!(
-            forced["discarded_sha256"].as_str().is_some_and(|d| d.len() == 64),
+            forced["discarded_sha256"]
+                .as_str()
+                .is_some_and(|d| d.len() == 64),
             "{label}: no digest of the discarded bytes: {forced}"
         );
 
@@ -1628,7 +1940,13 @@ fn a_block_with_no_marker_left_names_the_state_and_both_files() {
 fn an_npm_shaped_symlinked_engine_on_path_is_usable() {
     let fixture = Fixture::new(false);
     let root = fixture.temp.path().join("symlink-vault");
-    fixture.success(&["init", "--root", root.to_str().unwrap(), "--profile", "default"]);
+    fixture.success(&[
+        "init",
+        "--root",
+        root.to_str().unwrap(),
+        "--profile",
+        "default",
+    ]);
 
     // The control: the real path works, so a pass below is not "both fail".
     let direct = fixture.success(&["profile", "list"]);
@@ -1639,7 +1957,10 @@ fn an_npm_shaped_symlinked_engine_on_path_is_usable() {
     let link = npm_bin.join("kscope");
     std::os::unix::fs::symlink(&fixture.engine, &link).unwrap();
     assert!(
-        fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
         "the fixture did not create a symlink"
     );
 
@@ -1662,7 +1983,10 @@ fn an_npm_shaped_symlinked_engine_on_path_is_usable() {
         String::from_utf8_lossy(&through_link.stderr)
     );
     let through_link: Value = serde_json::from_slice(&through_link.stdout).unwrap();
-    assert_eq!(through_link, direct, "the symlink resolved to a different engine");
+    assert_eq!(
+        through_link, direct,
+        "the symlink resolved to a different engine"
+    );
 }
 
 /// When the engine cannot be resolved, the hook must say WHY.
@@ -1684,8 +2008,11 @@ fn the_hook_says_why_the_engine_could_not_be_resolved() {
     command
         .env_clear()
         .env("HOME", &fixture.home)
+        .env("KALEIDOSCOPE_USER_HOME", &fixture.home)
         .env("KALEIDOSCOPE_CONFIG_HOME", &fixture.config_home)
         .env("KSCOPE_PROFILE_HOME", &fixture.profile_home)
+        .current_dir(&fixture.project)
+        .stdin(std::process::Stdio::null())
         .arg("--engine")
         .arg(&not_executable)
         .args(["hook", "session-start", "--profile", "default"]);
@@ -1697,12 +2024,964 @@ fn the_hook_says_why_the_engine_could_not_be_resolved() {
     let context = parsed["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
+    let facts: Value = serde_json::from_str(context.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        facts["engine"],
+        Value::Null,
+        "an unresolvable engine must be reported as such: {facts}"
+    );
+    // The REASON, not a generic "could not be resolved". Asserted on the
+    // machine-readable field and on the prose, because the prose is what the
+    // model reads and the field is what an audit reads.
     assert!(
-        context.contains("could not be resolved"),
-        "the hook did not report the failure: {context}"
+        facts["profile_launch"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("not executable")),
+        "the hook swallowed the reason: {facts}"
     );
     assert!(
         context.contains("not executable"),
-        "the hook swallowed the reason: {context}"
+        "the reason did not reach the model: {context}"
     );
+}
+
+// =========================================================================
+// Exit codes, project root, and the user-scope default.
+// =========================================================================
+
+/// `doctor` grades its own report through the exit code.
+///
+/// BOTH halves, in one test. It used to print `status: "issues"` and exit 0, so
+/// "the report says there are problems" and "the command ran fine" were the
+/// same observation to any caller that checked `$?`. Asserting only the issue
+/// case would pass for an implementation that always returned 3.
+#[test]
+fn doctor_exits_three_on_an_issue_and_zero_when_clean() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("doctor-vault");
+    fixture.success(&[
+        "init",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--scope",
+        "project",
+        "--project",
+        fixture.project.to_str().unwrap(),
+        "--yes",
+    ]);
+
+    // The exact string `init` prints in its own `next` array, read from that
+    // array rather than retyped -- the command it advertises must parse.
+    let clean = fixture.command(&[
+        "doctor",
+        "--json",
+        "--project",
+        fixture.project.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        clean.status.code(),
+        Some(0),
+        "clean doctor: {}",
+        String::from_utf8_lossy(&clean.stderr)
+    );
+    let report: Value = serde_json::from_slice(&clean.stdout).expect("doctor prints JSON");
+    assert_eq!(report["status"], "ready");
+    assert!(
+        report["project"]["directory"].is_string(),
+        "doctor must report the resolved project so it is inspectable without a write"
+    );
+
+    fs::write(
+        fixture.project.join(".mcp.json.kaleidoscope-owner.json"),
+        b"{}",
+    )
+    .unwrap();
+    let broken = fixture.command(&[
+        "doctor",
+        "--json",
+        "--project",
+        fixture.project.to_str().unwrap(),
+    ]);
+    assert_eq!(broken.status.code(), Some(3), "an issue must exit 3");
+    let report: Value = serde_json::from_slice(&broken.stdout).unwrap();
+    assert_eq!(report["status"], "issues");
+    let issues = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|check| check["status"] == "issue")
+        .count();
+    assert!(issues >= 1, "exit 3 with no issue in the report");
+}
+
+/// Exit 3 must not leak out of `doctor`.
+///
+/// A source-level check, and the only thing standing between one new exit code
+/// and a second meaning attached to it somewhere else.
+#[test]
+fn doctor_issues_is_constructed_exactly_once() {
+    let mut sites = 0;
+    for name in [
+        "main.rs",
+        "host.rs",
+        "hooks.rs",
+        "instructions.rs",
+        "manager.rs",
+        "doctor.rs",
+        "engine.rs",
+        "config.rs",
+    ] {
+        let source = fs::read_to_string(format!("src/{name}")).unwrap();
+        // CONSTRUCTIONS only. `main` also names the variant, but in a match
+        // PATTERN -- that is the one place allowed to read it, and counting it
+        // would make this assertion impossible to satisfy.
+        sites += source
+            .matches("return Err(ManagerError::DoctorIssues(")
+            .count();
+    }
+    assert_eq!(sites, 1, "DoctorIssues is constructed at {sites} sites");
+}
+
+/// EVERY refusal exits non-zero AND changes nothing.
+///
+/// The digest half is what makes this more than an exit-code table: a refusal
+/// that exits 2 *after* writing would pass the status assertion alone.
+#[test]
+fn every_refusal_exits_non_zero_and_writes_nothing() {
+    let fixture = Fixture::new(false);
+    let project = fixture.project.to_str().unwrap().to_owned();
+    let root = fixture.temp.path().join("refusal-vault");
+    fixture.success(&[
+        "init",
+        "--root",
+        root.to_str().unwrap(),
+        "--profile",
+        "default",
+    ]);
+
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        ("unknown host", vec!["init", "--yes", "--host", "nonesuch"]),
+        (
+            "unknown scope",
+            vec!["init", "--yes", "--host", "claude-code", "--scope", "nope"],
+        ),
+        (
+            "adopt with create",
+            vec!["init", "--yes", "--adopt", "--create"],
+        ),
+        (
+            "opencode version on claude",
+            vec![
+                "init",
+                "--yes",
+                "--host",
+                "claude-code",
+                "--opencode-version",
+                "beta",
+            ],
+        ),
+        ("teardown without a host", vec!["teardown", "--yes"]),
+        (
+            "cursor has no skill",
+            vec![
+                "instructions",
+                "install",
+                "skill",
+                "--host",
+                "cursor",
+                "--project",
+                &project,
+            ],
+        ),
+        (
+            "skill without a host",
+            vec!["instructions", "install", "skill", "--project", &project],
+        ),
+        ("unknown subcommand", vec!["frobnicate"]),
+        (
+            "unknown flag",
+            vec!["init", "--yes", "--host", "claude-code", "--wat"],
+        ),
+        (
+            "profile show with junk",
+            vec!["profile", "show", "default", "--yes"],
+        ),
+        (
+            "disconnect with a profile",
+            vec!["disconnect", "claude-code", "--profile", "default"],
+        ),
+        ("connect to nothing", vec!["connect"]),
+        (
+            "bad instruction target",
+            vec!["instructions", "install", "nonesuch"],
+        ),
+        (
+            "instructions with no target",
+            vec!["instructions", "install"],
+        ),
+        (
+            "logout both ways",
+            vec!["logout", "--all-devices", "--local-only"],
+        ),
+    ];
+    for (name, arguments) in cases {
+        let before = fixture.tree_digest();
+        let output = fixture.command(&arguments);
+        assert_ne!(output.status.code(), Some(0), "{name} exited 0");
+        assert!(
+            !output.stderr.is_empty(),
+            "{name} refused without saying anything"
+        );
+        assert_eq!(fixture.tree_digest(), before, "{name} wrote something");
+    }
+}
+
+/// The one place the non-zero rule must NOT be applied.
+///
+/// A hook that exits non-zero is a hook the user turns off. The stdout
+/// assertion is the second half: a hook that exits 0 having printed nothing
+/// would satisfy the exit code and be useless.
+#[test]
+fn hook_session_start_always_exits_zero_and_says_something() {
+    let fixture = Fixture::new(false);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_kaleidoscope"));
+    let output = command
+        .env_clear()
+        .env("HOME", &fixture.home)
+        .env("KALEIDOSCOPE_USER_HOME", &fixture.home)
+        .args([
+            "--engine",
+            "/nonexistent/kscope",
+            "hook",
+            "session-start",
+            "--profile",
+            "default",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "the hook must never fail");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("the hook prints JSON");
+    assert!(
+        parsed["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .is_some_and(|context| !context.is_empty()),
+        "the hook exited 0 having said nothing"
+    );
+}
+
+/// `init` with no `--host` stays rc=0 and SAYS it wired nothing.
+///
+/// "I ran init and nothing got wired" is the shape of a silent failure. Both
+/// channels are asserted: the human line on stderr and the machine-readable
+/// step, because a script never reads the first and a person never reads the
+/// second.
+#[test]
+fn init_without_a_host_warns_that_nothing_was_wired() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("profile-only-vault");
+    let output = fixture.command(&["init", "--yes", "--root", root.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Nothing was wired"), "{stderr}");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let skipped = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|step| step["step"] == "hosts" && step["status"] == "skipped");
+    assert!(skipped, "the report must carry the skip: {report}");
+}
+
+/// USER SCOPE IS THE DEFAULT, and the split is reported.
+///
+/// All four placements are asserted, so a half-migrated implementation -- the
+/// entry moved but not the hook, say -- fails rather than passing on the one
+/// it did move.
+#[test]
+fn the_default_scope_is_user_and_the_split_is_reported() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("default-scope-vault");
+    let output = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--project",
+        fixture.project.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["scope"], "user");
+    assert_eq!(report["scope_source"], "default");
+    assert_eq!(report["instructions_scope"], "project");
+    assert_eq!(
+        report["scope_applies_to"],
+        serde_json::json!(["connect", "hook"])
+    );
+
+    // Connect and hook under the home; instructions and the skill in the
+    // project. Every one of the four.
+    assert!(
+        fixture.home.join(".claude.json").is_file(),
+        "the MCP entry did not move to the home"
+    );
+    assert!(
+        fixture.home.join(".claude/settings.json").is_file(),
+        "the hook did not move to the home"
+    );
+    assert!(
+        !fixture.project.join(".mcp.json").exists(),
+        "a project entry was still written"
+    );
+    assert!(
+        fixture.project.join("CLAUDE.md").is_file(),
+        "instructions must stay in the project"
+    );
+    assert!(
+        fixture
+            .project
+            .join(".claude/skills/use-kaleidoscope/SKILL.md")
+            .is_file(),
+        "the skill must stay in the project"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("scope user (default)"), "{stderr}");
+
+    // And an explicit flag is reported as such, so a reader can tell a default
+    // from a choice.
+    let explicit = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--scope",
+        "project",
+        "--project",
+        fixture.project.to_str().unwrap(),
+    ]);
+    let report: Value = serde_json::from_slice(&explicit.stdout).unwrap();
+    assert_eq!(report["scope"], "project");
+    assert_eq!(report["scope_source"], "flag");
+}
+
+/// A project-scope install left by the old default is NAMED, never removed.
+///
+/// "still present" and "rc 0" together rule out both the destructive
+/// implementation and the one that fails the command it is diagnosing.
+#[test]
+fn a_project_scope_install_is_warned_about_and_never_removed() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("carryover-vault");
+    let project = fixture.project.to_str().unwrap().to_owned();
+    fixture.success(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--scope",
+        "project",
+        "--project",
+        &project,
+    ]);
+    let mcp_before = fs::read(fixture.project.join(".mcp.json")).unwrap();
+    let settings_before = fs::read(fixture.project.join(".claude/settings.json")).unwrap();
+
+    let output = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--project",
+        &project,
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the probe must not fail the command"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let warning = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["step"] == "project_scope_carryover")
+        .expect("the stale project install must be named");
+    assert_eq!(warning["status"], "warning");
+    assert_eq!(
+        warning["remedy"],
+        "kaleidoscope teardown --host claude-code --scope project"
+    );
+    let next = report["next"].as_array().unwrap();
+    assert!(
+        next.iter().any(|value| value == &warning["remedy"]),
+        "the remedy must reach `next`: {next:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.project.join(".mcp.json")).unwrap(),
+        mcp_before
+    );
+    assert_eq!(
+        fs::read(fixture.project.join(".claude/settings.json")).unwrap(),
+        settings_before
+    );
+}
+
+/// The probe must absorb an error it cannot act on.
+///
+/// `inspect_owned_connection` returns `Err` for an unmanaged project entry.
+/// A diagnostic that can fail the command it diagnoses is removed by the first
+/// person it annoys, so rc=0 is the assertion.
+#[test]
+fn the_carryover_probe_survives_an_unmanaged_project_entry() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("foreign-carryover-vault");
+    fs::write(
+        fixture.project.join(".mcp.json"),
+        br#"{"mcpServers":{"kaleidoscope":{"command":"somewhere-else"}}}"#,
+    )
+    .unwrap();
+    let output = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--project",
+        fixture.project.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a foreign PROJECT entry is not in user scope's way: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `--project` short-circuits the engine entirely.
+///
+/// Proved by PRECEDENCE, not by outcome: the engine here cannot answer, so a
+/// run that consulted it would fail.
+#[test]
+fn an_explicit_project_never_consults_the_engine_for_the_root() {
+    let fixture = Fixture::new(false);
+    let stub = fixture.temp.path().join("stub-kscope");
+    fs::write(
+        &stub,
+        "#!/bin/sh\ncase \"$1\" in --version) echo 'kscope 0.1.0-test';; where) echo 'no' >&2; exit 2;; *) exit 64;; esac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_kaleidoscope"));
+    let output = command
+        .env_clear()
+        .env("HOME", &fixture.home)
+        .env("KALEIDOSCOPE_USER_HOME", &fixture.home)
+        .args([
+            "--engine",
+            stub.to_str().unwrap(),
+            "instructions",
+            "install",
+            "claude",
+            "--yes",
+            "--project",
+            fixture.project.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "--project must not need the engine: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fixture.project.join("CLAUDE.md").is_file());
+}
+
+/// The opposite arm, and it must be the opposite ANSWER.
+///
+/// Engine present but unable to report the root: REFUSE. Falling back to the
+/// working directory here would silently reintroduce the very defect being
+/// fixed, for exactly the users who have an engine and expect it to be used.
+#[test]
+fn an_engine_that_cannot_report_the_root_refuses_and_names_project() {
+    let fixture = Fixture::new(false);
+    let stub = fixture.temp.path().join("stub-kscope-2");
+    fs::write(
+        &stub,
+        "#!/bin/sh\ncase \"$1\" in --version) echo 'kscope 0.1.0-test';; where) echo 'unrecognised argument' >&2; exit 2;; *) exit 64;; esac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_kaleidoscope"));
+    let output = command
+        .env_clear()
+        .env("HOME", &fixture.home)
+        .env("KALEIDOSCOPE_USER_HOME", &fixture.home)
+        .current_dir(&fixture.project)
+        .args([
+            "--engine",
+            stub.to_str().unwrap(),
+            "instructions",
+            "install",
+            "claude",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--project"), "{stderr}");
+    assert!(
+        !fixture.project.join("CLAUDE.md").exists(),
+        "a refusal must write nothing"
+    );
+}
+
+/// The engine is asked for the project ONCE per invocation.
+///
+/// A per-call-site resolution produces exactly the same paths and fails only
+/// this: the log is the instrument, not the outcome.
+#[test]
+fn the_project_root_is_resolved_once_per_invocation() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("once-vault");
+    fixture.success(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--scope",
+        "project",
+    ]);
+    let log = fs::read_to_string(&fixture.log).unwrap();
+    let calls = log.matches("<where> <--root-only>").count();
+    assert_eq!(
+        calls, 1,
+        "the engine was asked {calls} times for the project root"
+    );
+}
+
+/// `KSCOPE_ROOT` cannot move where project-scoped files are written.
+///
+/// It is a CANARY in this fixture, so it is set on every invocation. The
+/// assertion is on `project_source`, not merely on the resulting path: proving
+/// the allowlist exclusion is doing work, rather than that the value happened
+/// to be absent.
+#[test]
+fn kscope_root_cannot_move_the_project_directory() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("canary-vault");
+    let output = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--scope",
+        "project",
+        "--project",
+        fixture.project.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_ne!(report["project"]["source"], "environment");
+    assert_eq!(
+        report["project"]["directory"],
+        Value::String(fixture.project.display().to_string())
+    );
+    assert!(fixture.project.join(".mcp.json").is_file());
+}
+
+/// Each harness's own configuration-directory override moves the USER-scope
+/// target, and only that one.
+#[test]
+fn the_harness_config_directory_overrides_are_honoured() {
+    for (variable, relative) in [
+        ("CLAUDE_CONFIG_DIR", "elsewhere/.claude.json"),
+        ("XDG_CONFIG_HOME", "elsewhere/opencode/opencode.json"),
+        ("CODEX_HOME", "elsewhere/config.toml"),
+    ] {
+        let fixture = Fixture::new(false);
+        let elsewhere = fixture.temp.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        // CANONICALISED. The temp root is reached through /var, a symlink to
+        // /private/var, and the manager refuses a configuration directory with
+        // a symlinked ancestor -- correctly. An uncanonicalised path here made
+        // the test fail on the guard rather than on the behaviour.
+        let elsewhere = fs::canonicalize(&elsewhere).unwrap();
+        let host = match variable {
+            "CLAUDE_CONFIG_DIR" => "claude-code",
+            "XDG_CONFIG_HOME" => "opencode",
+            _ => "codex",
+        };
+        let root = fixture.temp.path().join(format!("{host}-override-vault"));
+        let output = fixture.command_with(
+            &[(variable, elsewhere.as_path())],
+            &[
+                "init",
+                "--yes",
+                "--root",
+                root.to_str().unwrap(),
+                "--host",
+                host,
+                "--project",
+                fixture.project.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{variable}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let moved = fs::canonicalize(fixture.temp.path())
+            .unwrap()
+            .join(relative);
+        assert!(
+            moved.is_file(),
+            "{variable} did not move the target to {}",
+            moved.display()
+        );
+    }
+}
+
+/// A failure in the second tree must not leave the first applied.
+///
+/// The home-side assertion is the entire point: without the pre-flight, user
+/// scope wrote `~/.claude.json` and only then failed on the read-only project.
+#[test]
+fn the_preflight_prevents_a_partial_apply_across_two_trees() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("preflight-vault");
+    fs::set_permissions(&fixture.project, fs::Permissions::from_mode(0o555)).unwrap();
+    let output = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--project",
+        fixture.project.to_str().unwrap(),
+    ]);
+    fs::set_permissions(&fixture.project, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        !fixture.home.join(".claude.json").exists(),
+        "the home side was applied before the project side failed"
+    );
+    assert!(
+        !fixture.home.join(".claude/settings.json").exists(),
+        "the hook was installed before the project side failed"
+    );
+    assert!(!fixture.project.join(".mcp.json").exists());
+}
+
+/// Every removal reports which tier it achieved.
+///
+/// A reversibility claim that cannot say which of the three it reached is a
+/// claim nothing can check.
+#[test]
+fn every_removal_reports_a_restore_tier() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("tier-vault");
+    let project = fixture.project.to_str().unwrap().to_owned();
+    fixture.success(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "claude-code",
+        "--scope",
+        "project",
+        "--project",
+        &project,
+    ]);
+    let output = fixture.success(&[
+        "teardown",
+        "--yes",
+        "--host",
+        "claude-code",
+        "--scope",
+        "project",
+        "--project",
+        &project,
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for step in report["steps"].as_array().unwrap() {
+        if step["action"] == "remove" {
+            assert!(
+                step["restore"].is_string(),
+                "a removal with no reported tier: {step}"
+            );
+        }
+    }
+}
+
+/// PROJECT-SCOPED FILES LAND AT THE PROJECT ROOT, NOT THE WORKING DIRECTORY.
+///
+/// Driven with an engine that actually WALKS -- the fixture's default answers
+/// with the working directory, which is exactly the old behaviour and so could
+/// not distinguish a fix from a regression.
+///
+/// The NEGATIVE half is what makes this non-vacuous: asserting only that the
+/// four files exist at the root would pass for an implementation that wrote
+/// them in BOTH places.
+#[test]
+fn a_nested_working_directory_writes_at_the_project_root() {
+    let fixture = Fixture::new(false);
+    fixture.make_the_engine_walk();
+    let deep = fixture.project.join("src").join("deep");
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(fixture.project.join("CLAUDE.md"), "# Mine\n").unwrap();
+
+    let root = fixture.temp.path().join("nested-vault");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_kaleidoscope"));
+    let output = command
+        .env_clear()
+        .env("HOME", &fixture.home)
+        .env("KALEIDOSCOPE_USER_HOME", &fixture.home)
+        .env("KALEIDOSCOPE_CONFIG_HOME", &fixture.config_home)
+        .env("KALEIDOSCOPE_DATA_HOME", &fixture.data_home)
+        .env("KSCOPE_PROFILE_HOME", &fixture.profile_home)
+        .current_dir(&deep)
+        .args([
+            "--engine",
+            fixture.engine.to_str().unwrap(),
+            "init",
+            "--yes",
+            "--root",
+            root.to_str().unwrap(),
+            "--host",
+            "claude-code",
+            "--scope",
+            "project",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for relative in [
+        ".mcp.json",
+        "CLAUDE.md",
+        ".claude/settings.json",
+        ".claude/skills/use-kaleidoscope/SKILL.md",
+    ] {
+        assert!(
+            fixture.project.join(relative).is_file(),
+            "{relative} did not land at the project root"
+        );
+        assert!(
+            !deep.join(relative).exists(),
+            "{relative} was ALSO written in the working directory"
+        );
+    }
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["project"]["differs_from_cwd"], true);
+    assert_eq!(
+        report["project"]["directory"],
+        Value::String(fixture.project.display().to_string())
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("project root is") && stderr.contains("not the current directory"),
+        "the user must be told where the files went: {stderr}"
+    );
+}
+
+/// A receiptless, DIFFERING Codex marker block must refuse with a remedy that
+/// is true and that a user can actually carry out.
+///
+/// This is the shape adoption did not cover. `plan_codex_install_at` only
+/// adopts a block that is byte-identical; anything else used to fall into
+/// `validate_current_ownership`'s `(None, Some(current))` catch-all and report
+/// `InvalidOwnerReceipt`, whose text says to "delete the Kaleidoscope entry and
+/// its `*.kaleidoscope-owner.json` receipt beside it by hand" -- naming a
+/// receipt that in this state does not exist.
+///
+/// The loop is the reason this is a defect rather than a wording nit: the user
+/// hand-edits inside the block, is told to delete the entry AND the receipt,
+/// deletes the receipt, and gets the IDENTICAL message back, now naming a file
+/// they have already removed. Following the remedy can never satisfy it,
+/// because the blocker is the block and the message talks about the receipt.
+///
+/// The refusal itself is correct and must stay: the content differs, so
+/// adoption must not take it. Only the remedy has to become reachable.
+#[test]
+fn a_receiptless_differing_codex_block_refuses_with_a_reachable_remedy() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("codex-block-vault");
+    let project = fixture.project.to_str().unwrap().to_owned();
+    fixture.success(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "codex",
+        "--scope",
+        "project",
+        "--project",
+        &project,
+    ]);
+
+    let config = fixture.project.join(".codex/config.toml");
+    let receipt = fixture
+        .project
+        .join(".codex/config.toml.kaleidoscope-owner.json");
+    assert!(receipt.is_file(), "the clean install must leave a receipt");
+
+    // Step 1: hand-edit INSIDE the manager's own block.
+    let edited = fs::read_to_string(&config)
+        .unwrap()
+        .replace("startup_timeout_sec = 10", "startup_timeout_sec = 25");
+    fs::write(&config, &edited).unwrap();
+
+    // Step 2: follow the old remedy -- delete the receipt.
+    fs::remove_file(&receipt).unwrap();
+
+    let output = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "codex",
+        "--scope",
+        "project",
+        "--project",
+        &project,
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a differing block must refuse"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The remedy must not name a receipt that is not there.
+    assert!(
+        !stderr.contains("receipt beside it by hand"),
+        "the refusal still names a receipt the user has already deleted: {stderr}"
+    );
+    // It must name a flag that `init` actually parses, and the concrete edit.
+    assert!(
+        stderr.contains("--no-connect"),
+        "the refusal names no way forward: {stderr}"
+    );
+    assert!(
+        stderr.contains("kaleidoscope-manager"),
+        "the refusal does not say which region to delete: {stderr}"
+    );
+    // Nothing may have been written.
+    assert_eq!(
+        fs::read_to_string(&config).unwrap(),
+        edited,
+        "a refused init changed the file"
+    );
+    assert!(!receipt.exists(), "a refused init wrote a receipt");
+
+    // And the named way forward must actually work.
+    let proceeds = fixture.command(&[
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "codex",
+        "--scope",
+        "project",
+        "--project",
+        &project,
+        "--no-connect",
+    ]);
+    assert_eq!(
+        proceeds.status.code(),
+        Some(0),
+        "the flag the refusal named did not proceed: {}",
+        String::from_utf8_lossy(&proceeds.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&config).unwrap(),
+        edited,
+        "--no-connect touched the block it was told to leave alone"
+    );
+}
+
+/// The same file, made byte-identical again, is ADOPTED rather than refused.
+///
+/// The companion to the test above: the refusal's closing sentence promises
+/// this, so it is asserted rather than left as prose.
+#[test]
+fn a_receiptless_identical_codex_block_is_adopted_in_place() {
+    let fixture = Fixture::new(false);
+    let root = fixture.temp.path().join("codex-adopt-vault");
+    let project = fixture.project.to_str().unwrap().to_owned();
+    let arguments = [
+        "init",
+        "--yes",
+        "--root",
+        root.to_str().unwrap(),
+        "--host",
+        "codex",
+        "--scope",
+        "project",
+        "--project",
+        &project,
+    ];
+    fixture.success(&arguments);
+
+    let config = fixture.project.join(".codex/config.toml");
+    let receipt = fixture
+        .project
+        .join(".codex/config.toml.kaleidoscope-owner.json");
+    let before = fs::read(&config).unwrap();
+    fs::remove_file(&receipt).unwrap();
+
+    let output = fixture.success(&arguments);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let connect = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["step"] == "connect")
+        .expect("a connect step");
+    assert_eq!(
+        connect["action"], "adopt",
+        "identical content was not adopted"
+    );
+    assert_eq!(
+        fs::read(&config).unwrap(),
+        before,
+        "adoption rewrote the file it was supposed to leave alone"
+    );
+    assert!(receipt.is_file(), "adoption did not write the receipt");
 }

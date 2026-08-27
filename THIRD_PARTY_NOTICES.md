@@ -253,7 +253,7 @@ of them. They are listed for disclosure.
 
 ## PyPI -- resolved at install time, not vendored
 
-The published `kaleidoscope-memory` wheel contains only `src/kaleidoscope_memory`.
+The published `kscope-memory` wheel contains only `src/kaleidoscope_memory`.
 The distributions below are declared dependencies that pip resolves from the
 index; we redistribute none of them. Optional extras are marked. Licence strings
 are not restated here because pip records the authoritative metadata in the

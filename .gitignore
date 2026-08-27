@@ -38,3 +38,16 @@ conformance/.work/
 # on every run by the parity suites and read by nothing.
 python/tests/artifacts/
 typescript/test/artifacts/
+
+# The manager installs these into whatever project it is run in, and every
+# manual test runs it inside this repository. They carry absolute local paths
+# and receipt digests -- poison_scan.py fails on .claude/settings.json for
+# "contains developer home path" -- and this repository is published, so they
+# must never be committed.
+.mcp.json
+.mcp.json.kaleidoscope-backup
+.mcp.json.kaleidoscope-owner.json
+.claude/
+*.kaleidoscope-backup
+*.kaleidoscope-owner.json
+*.kaleidoscope-instruction-owner.json

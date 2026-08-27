@@ -1,0 +1,145 @@
+{
+  "candidate": {
+    "bundled_model": true,
+    "engine_sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
+    "engine_source_commit": "d96355632cc52816472106d0776ce63d73631fef",
+    "engine_version": "kscope 0.0.0-proposal",
+    "public_contract_sha256": "a2357ed6c00e3e143d08581590571447e31d24fd0e7d2466d28a211a0515c75e",
+    "signature_verified": false
+  },
+  "contract_sources": [
+    {
+      "claims": [
+        "local stdio MCP servers are supported",
+        "the default user configuration is ~/.codex/config.toml",
+        "codex mcp add/list/help are documented CLI workflows"
+      ],
+      "url": "https://developers.openai.com/codex/mcp"
+    }
+  ],
+  "dependency_held": {
+    "claude_code_native_acceptance": "host CLI is not installed on the executing machine",
+    "codex_ide_acceptance": "requires an explicitly authorized isolated IDE runner",
+    "codex_model_or_tui_acceptance": "requires an explicitly authorized live host/model run",
+    "cursor_native_acceptance": "host CLI is not installed on the executing machine",
+    "live_oidc_and_keychain": "requires staging issuer credentials and native acceptance runners",
+    "opencode_native_acceptance": "host CLI is not installed on the executing machine",
+    "production_publication": "requires separate final approval"
+  },
+  "generated_at": "2026-08-22T05:28:10.461448Z",
+  "host_inventory": {
+    "claude_code": {
+      "detected": false,
+      "host": "claude-code",
+      "ide_acceptance": false,
+      "live_model_acceptance": false,
+      "native_cli_acceptance": false,
+      "reason": "host CLI is not installed on the executing machine",
+      "status": "held"
+    },
+    "codex": {
+      "acceptance_level": "native_cli_configuration_only",
+      "detected": true,
+      "native_cli_acceptance": true,
+      "status": "pass"
+    },
+    "cursor": {
+      "detected": false,
+      "host": "cursor",
+      "ide_acceptance": false,
+      "live_model_acceptance": false,
+      "native_cli_acceptance": false,
+      "reason": "host CLI is not installed on the executing machine",
+      "status": "held"
+    },
+    "opencode": {
+      "detected": false,
+      "host": "opencode",
+      "ide_acceptance": false,
+      "live_model_acceptance": false,
+      "native_cli_acceptance": false,
+      "reason": "host CLI is not installed on the executing machine",
+      "status": "held"
+    }
+  },
+  "platform": {
+    "architecture": "arm64",
+    "native_tested": true,
+    "os": "darwin"
+  },
+  "promotion": {
+    "authorized": false,
+    "release_readiness_claimed": false
+  },
+  "schema_version": "kaleidoscope.dx10b-native-host-local-evidence.v1",
+  "scope": "credential-free-native-host-management-and-generic-mcp-discovery",
+  "sdk_input": {
+    "manager_sha256": "4fecd84584ed50dacde0677a9aba18c8a44ce6a58ea499e701e2c6dcd1c05b3e",
+    "manager_version": "kaleidoscope 0.1.0",
+    "provenance_sha256": "7b08171edaf1aac81f81c78d5bd704674db3f2a8c3e44f122cccf456ee3ff82e",
+    "provenance_subject_and_source_verified": true,
+    "source_commit": "05948a3acfbf0a325f06ecfe6057db484f02e5a1"
+  },
+  "tests": {
+    "codex_cli_management": {
+      "acceptance_level": "native_cli_configuration_only",
+      "account_commands_invoked": false,
+      "binary_sha256": "10afbeddd6f951635d8fcfbb337034d37934bb3495c16d053b3560d75747619b",
+      "byte_exact_remove_rollback": true,
+      "commands": [
+        "add",
+        "list",
+        "get",
+        "remove"
+      ],
+      "configuration_environment_fields": false,
+      "isolated_codex_home": true,
+      "model_invocations": 0,
+      "project_unchanged": true,
+      "status": "pass",
+      "transport": "stdio",
+      "tui_or_ide_invoked": false,
+      "vault_coordinates_in_configuration": false,
+      "version": "codex-cli 0.149.0-alpha.4"
+    },
+    "execution_boundary": {
+      "account_commands_invoked": false,
+      "blackhole_proxy_configured": true,
+      "browser_invoked": false,
+      "ide_or_tui_invoked": false,
+      "model_invocations": 0,
+      "network_dependent_commands_invoked": false,
+      "status": "pass"
+    },
+    "generic_mcp_discovery": {
+      "client": "dependency-free-json-rpc-stdio",
+      "model_invocations": 0,
+      "process_exited": true,
+      "protocol_revision": "2025-11-25",
+      "status": "pass",
+      "tool_calls": 0,
+      "tool_count": 2,
+      "tools": [
+        "search",
+        "remember"
+      ]
+    },
+    "isolated_profile_and_vault": {
+      "status": "pass",
+      "temporary_codex_home": true,
+      "temporary_home": true,
+      "temporary_profile": true,
+      "temporary_project": true,
+      "temporary_vault": true,
+      "temporary_xdg_roots": true,
+      "user_configuration_read_or_written": false
+    },
+    "privacy": {
+      "configuration_environment_fields": false,
+      "raw_identity_coordinates_in_evidence": false,
+      "source_poison": "pass",
+      "status": "pass",
+      "vault_coordinates_in_configuration_or_evidence": false
+    }
+  }
+}

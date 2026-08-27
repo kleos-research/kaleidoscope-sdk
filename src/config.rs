@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::{Component, Path, PathBuf};
 
@@ -22,6 +22,23 @@ pub struct ManagerConfig {
     /// carry a vault coordinate, account credential, entitlement or token.
     #[serde(default)]
     pub account_bindings: BTreeMap<String, Uuid>,
+    /// Project roots this manager has installed instructions or a skill into.
+    ///
+    /// WHY THE MANAGER HAS TO REMEMBER THIS. Under the new default, `--scope
+    /// user` puts the MCP entry and the hook in ONE machine-wide file while
+    /// the instructions and the skill stay project-anchored. So a teardown run
+    /// in project A removed the entry every other project was using, reported
+    /// `status: "removed"`, rc=0, and said nothing -- leaving B with a
+    /// `CLAUDE.md` that tells the agent to call `search` and `remember` and
+    /// nothing behind them. Nothing in a user-scope install recorded which
+    /// projects were involved, so no teardown could know it was doing that.
+    ///
+    /// Local, non-secret, and self-healing: an entry whose project no longer
+    /// carries a manager receipt is dropped on the next read, so an unbounded
+    /// list of dead paths cannot accumulate and a directory deleted by hand
+    /// does not wedge anything.
+    #[serde(default)]
+    pub installed_projects: BTreeSet<PathBuf>,
 }
 
 impl Default for ManagerConfig {
@@ -30,6 +47,7 @@ impl Default for ManagerConfig {
             version: MANAGER_CONFIG_VERSION,
             active_profile: None,
             account_bindings: BTreeMap::new(),
+            installed_projects: BTreeSet::new(),
         }
     }
 }
@@ -44,6 +62,13 @@ impl ManagerConfig {
         }
         if let Some(profile) = &self.active_profile {
             validate_profile_name(profile)?;
+        }
+        for project in &self.installed_projects {
+            if !project.is_absolute() {
+                return Err(ManagerError::InvalidManagerConfig(
+                    "installed project path is not absolute",
+                ));
+            }
         }
         for (profile, account_id) in &self.account_bindings {
             validate_profile_name(profile)?;
@@ -115,6 +140,48 @@ impl ConfigStore {
             .map_err(|_| ManagerError::InvalidManagerConfig("cannot encode JSON"))?;
         bytes.push(b'\n');
         atomic_write(&path, &bytes, Some(0o600))
+    }
+
+    /// Record that this project now carries manager-owned instructions.
+    ///
+    /// Best effort by design: a failure here must never fail an `init` that
+    /// has already written every file it promised. The cost of not recording
+    /// is a teardown that warns less, not one that damages more.
+    pub fn register_project(&self, project: &Path) {
+        let Ok(mut config) = self.load() else { return };
+        if !config.installed_projects.insert(project.to_path_buf()) {
+            return;
+        }
+        let _ = self.save(&config);
+    }
+
+    /// Drop this project, and any registered project that no longer carries a
+    /// manager receipt. `keeps` decides the latter, so the caller owns the
+    /// definition of "still installed" and this module owns the storage.
+    pub fn forget_project(&self, project: &Path, keeps: impl Fn(&Path) -> bool) {
+        let Ok(mut config) = self.load() else { return };
+        let before = config.installed_projects.len();
+        config
+            .installed_projects
+            .retain(|candidate| candidate != project && keeps(candidate));
+        if config.installed_projects.len() == before {
+            return;
+        }
+        let _ = self.save(&config);
+    }
+
+    /// Registered projects other than `project` that `keeps` still recognises.
+    pub fn other_projects(&self, project: &Path, keeps: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+        self.load().map_or_else(
+            |_| Vec::new(),
+            |config| {
+                config
+                    .installed_projects
+                    .into_iter()
+                    .filter(|candidate| candidate != project && keeps(candidate))
+                    .collect()
+            },
+        )
     }
 
     pub fn set_active_profile(&self, profile: Option<&str>) -> Result<ManagerConfig> {
@@ -196,11 +263,71 @@ pub fn user_home() -> Result<PathBuf> {
     canonical_directory(&home, "user home")
 }
 
+/// Explicit path, or the working directory.
+///
+/// **CLI callers never reach the fallback.** `main.rs` resolves the project
+/// ONCE per invocation -- asking the engine, which owns the ancestor walk -- and
+/// passes `Some(directory)` into every one of the six call sites below this.
+/// The `current_dir` arm is the library API's default for an embedder who has
+/// no engine handy, and `the_cli_never_falls_back_to_the_working_directory`
+/// asserts the CLI does not take it.
+///
+/// It is documented rather than removed because removing it would force an
+/// engine dependency on `instructions install`, which today has none.
 pub fn project_root(explicit: Option<&Path>) -> Result<PathBuf> {
     let root = explicit
         .map_or_else(env::current_dir, |path| Ok(path.to_path_buf()))
         .map_err(|error| ManagerError::io("resolve project directory", error))?;
     canonical_directory(&root, "project directory")
+}
+
+/// Where Claude Code keeps its user-scope configuration.
+///
+/// `$CLAUDE_CONFIG_DIR` when set, else the home directory. Harmless to ignore
+/// while user scope was opt-in; a wrong-file write on the path every user takes
+/// the moment user scope became the default. Measured: with the variable set,
+/// Claude Code reads `$CLAUDE_CONFIG_DIR/.claude.json` and the manager was
+/// writing to `$HOME/.claude.json`.
+pub fn claude_config_dir(home: &Path) -> Result<PathBuf> {
+    directory_override("CLAUDE_CONFIG_DIR", home)
+}
+
+/// `$CODEX_HOME` when set, else `<home>/.codex`.
+pub fn codex_home(home: &Path) -> Result<PathBuf> {
+    match directory_override_raw("CODEX_HOME")? {
+        Some(path) => Ok(path),
+        None => Ok(home.join(".codex")),
+    }
+}
+
+/// `$XDG_CONFIG_HOME` when set, else `<home>/.config`.
+///
+/// Only for the host-config path builder. `platform_config_base` below has its
+/// own, platform-conditional reading of the same variable and deliberately
+/// keeps it: on macOS the manager's OWN state lives under
+/// `Library/Application Support` whatever XDG says, while a harness that reads
+/// XDG reads it on every platform.
+pub fn xdg_config_home(home: &Path) -> Result<PathBuf> {
+    match directory_override_raw("XDG_CONFIG_HOME")? {
+        Some(path) => Ok(path),
+        None => Ok(home.join(".config")),
+    }
+}
+
+fn directory_override(name: &str, fallback: &Path) -> Result<PathBuf> {
+    Ok(directory_override_raw(name)?.unwrap_or_else(|| fallback.to_path_buf()))
+}
+
+/// Validated but NOT canonicalised: the directory may legitimately not exist
+/// yet, and `canonical_directory` would refuse it. The absolute-and-
+/// traversal-free check is the property the write path depends on.
+fn directory_override_raw(name: &str) -> Result<Option<PathBuf>> {
+    let Some(value) = env::var_os(name).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    validate_config_path(&path)?;
+    Ok(Some(path))
 }
 
 pub fn default_vault_root(profile: &str) -> Result<PathBuf> {
@@ -325,7 +452,30 @@ mod tests {
             version: MANAGER_CONFIG_VERSION,
             active_profile: Some("default".to_owned()),
             account_bindings: BTreeMap::from([("default".to_owned(), Uuid::nil())]),
+            installed_projects: BTreeSet::new(),
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn a_relative_installed_project_is_refused() {
+        let config = ManagerConfig {
+            version: MANAGER_CONFIG_VERSION,
+            active_profile: None,
+            account_bindings: BTreeMap::new(),
+            installed_projects: BTreeSet::from([PathBuf::from("relative/path")]),
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn a_config_written_before_the_registry_existed_still_loads() {
+        // `deny_unknown_fields` cuts one way only: an OLD file missing a NEW
+        // field must keep loading, or the first upgrade refuses every install
+        // already on disk.
+        let config: ManagerConfig =
+            serde_json::from_str(r#"{"version":2,"active_profile":"default"}"#).unwrap();
+        config.validate().unwrap();
+        assert!(config.installed_projects.is_empty());
     }
 }

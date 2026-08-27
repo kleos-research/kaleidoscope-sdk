@@ -224,8 +224,6 @@ def test_third_party_notices_names_every_directly_declared_dependency() -> None:
         re.split(r"[<>=!;\[ ]", requirement, maxsplit=1)[0]
         for requirement in pyproject["project"]["dependencies"]
     }
-    python_direct = {name for name in python_direct if not name.startswith("kaleidoscope-memory-native")}
-
     declared = rust_direct | npm_direct | python_direct
     # Three manifests that between them declare nothing would make the
     # comprehension below empty and this test green. They do not; assert it.

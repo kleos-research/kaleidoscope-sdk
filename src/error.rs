@@ -30,7 +30,15 @@ pub enum ManagerError {
     InvalidHostConfig(String),
     #[error("host configuration conflict: {0}")]
     HostConflict(String),
-    #[error("host configuration changed after preview; no files were overwritten")]
+    /// The message names the harness because this now happens on the DEFAULT
+    /// path. `~/.claude.json` is Claude Code's own live configuration -- it
+    /// rewrites the file itself, whenever it feels like it -- and user scope
+    /// made that file the manager's default target. Surfacing the race rather
+    /// than clobbering it is correct; leaving the user with no idea what raced
+    /// them is not.
+    #[error(
+        "host configuration changed between the preview and the write, so nothing was overwritten. If the target is ~/.claude.json, Claude Code rewrites that file itself: close it (or wait for it to settle) and re-run."
+    )]
     ConcurrentEdit,
     /// The managed entry and its owner receipt no longer agree.
     ///
@@ -38,9 +46,21 @@ pub enum ManagerError {
     /// hook receipts that also reach this arm, and the message named no way
     /// forward at all -- a user who had hand-edited a manager-owned `.mcp.json`
     /// entry got rc=2 from `teardown`, `teardown --force` and `disconnect`
-    /// alike and no third option. There is still no `--force` path through the
-    /// host-config planners (see the OUTSTANDING notes), so the remedy the
-    /// message gives is the manual one, which does work.
+    /// alike and no third option.
+    ///
+    /// **There is deliberately no `--force` through the host-config planners,
+    /// and that is now a decision rather than an outstanding item.** An
+    /// instruction block is delimited by the manager's own markers, so forcing
+    /// there discards bytes provably inside its own region, disclosed and
+    /// backed up first. A foreign `mcpServers.kaleidoscope` entry has no such
+    /// proof -- it may be another tool's, or a hand-tuned command line -- and
+    /// discarding it is unrecoverable. The manual remedy is one action, is
+    /// reversible by the user, and `unmanaged_json_entry_message` now spells it
+    /// out with the exact path and key.
+    ///
+    /// Deleting the receipt is also SAFE for the first time: since adoption, a
+    /// re-run over unchanged content adopts it instead of refusing it, so the
+    /// remedy below no longer trades one wedge for another.
     #[error(
         "the manager-owned entry no longer matches its owner receipt, so no manager command will edit it. Nothing was changed. If you edited it on purpose, delete the Kaleidoscope entry and its `*.kaleidoscope-owner.json` (or `*.kaleidoscope-instruction-owner.json`) receipt beside it by hand, then re-run `kaleidoscope init`."
     )]
@@ -99,6 +119,25 @@ pub enum ManagerError {
         "{root} is already a Kaleidoscope vault ({workspaces} workspace(s)). Creating a profile there would FORK it -- the engine adds a SECOND workspace to the same directory, the two profiles then hold separate memory in it, and `profile import` refuses afterwards because the vault has two workspaces, so no manager command undoes it. Re-run without --create to adopt it, or name an empty --root."
     )]
     WouldForkVault { root: String, workspaces: usize },
+    /// `doctor` ran to completion and at least one check reported an issue.
+    ///
+    /// The ONLY error mapped to exit 3, and the only one constructed outside a
+    /// failure path: `doctor` succeeded at its job, which is to find problems.
+    /// It is separated from the generic rc=2 because a script that runs
+    /// `doctor` needs to tell "the report says there are issues" from "the
+    /// command could not run", and both used to be indistinguishable -- rc=0
+    /// with `status: "issues"` on one side and rc=2 on the other.
+    #[error("doctor found {0} issue(s); see the checks array")]
+    DoctorIssues(usize),
+    /// A host configuration file the manager cannot safely read whole.
+    ///
+    /// Carried separately from `UnsafePath` because `~/.claude.json` -- 152 KB
+    /// here, holding Claude Code's OAuth account, project list and caches, at
+    /// ~15% of the 1 MiB cap and growing -- is now the DEFAULT target. "unsafe
+    /// host configuration path: not a bounded regular file" is an opaque
+    /// sentence to meet on the path every user takes.
+    #[error("{0}")]
+    HostConfigTooLarge(String),
     #[error(transparent)]
     Account(#[from] crate::account::AccountError),
 }

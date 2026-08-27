@@ -5,11 +5,12 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::config::{project_root, user_home};
+use crate::config::{claude_config_dir, codex_home, project_root, user_home, xdg_config_home};
 use crate::error::{ManagerError, Result};
 use crate::fs_safe::{
-    FileLock, Snapshot, assert_unchanged, atomic_remove, atomic_write, digest_bytes, read_snapshot,
-    prune_empty_managed_directories, restore_snapshot, sibling_path, write_bounded_backup,
+    FileLock, Snapshot, TargetWrite, assert_unchanged, atomic_remove, atomic_write, digest_bytes,
+    prune_empty_managed_directories, read_snapshot, restore_snapshot, sibling_path,
+    write_bounded_backup,
 };
 use crate::instructions::RestoreTier;
 use crate::model::{LaunchDescriptor, validate_profile_name};
@@ -157,9 +158,31 @@ struct OwnershipReceipt {
     #[serde(default)]
     post_sha256: String,
     config_created: bool,
+    /// True when the manager took ownership of content it did NOT write,
+    /// because that content was byte-identical to what it would have written.
+    ///
+    /// Sticky: an `Update` over an adopted target carries it forward, exactly
+    /// as `config_created` is carried forward, because the question it answers
+    /// -- "did the pre-manager state already include this entry?" -- is a fact
+    /// about the past that a later write cannot change.
+    ///
+    /// `serde(default)` and NO version bump. A new binary reads every receipt
+    /// already on disk correctly, because `adopted: false` ("the manager wrote
+    /// it") is true of every receipt written to date; bumping
+    /// `OWNER_RECEIPT_VERSION` would refuse all of them and wedge existing
+    /// installs behind a manual `rm`. The cost, stated so it is not discovered:
+    /// an OLDER binary reading a NEW receipt hits `deny_unknown_fields` and
+    /// reports `InvalidOwnerReceipt`, so downgrading the manager over an
+    /// existing install needs the two sidecars deleted by hand. That is what
+    /// `InvalidOwnerReceipt`'s message already tells the user to do -- and
+    /// after adoption it is a SAFE remedy for the first time, because the
+    /// re-run adopts the unchanged content instead of refusing it.
+    #[serde(default)]
+    adopted: bool,
 }
 
 impl OwnershipReceipt {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         host: Host,
         scope: Scope,
@@ -170,6 +193,7 @@ impl OwnershipReceipt {
         open_code_version: Option<OpenCodeVersion>,
         pre_sha256: String,
         post_sha256: String,
+        adopted: bool,
     ) -> Result<Self> {
         validate_profile_name(profile)?;
         let owned_sha256 = owned_digest(format, &owned)?;
@@ -186,6 +210,7 @@ impl OwnershipReceipt {
             pre_sha256,
             post_sha256,
             config_created,
+            adopted,
         })
     }
 
@@ -237,10 +262,16 @@ pub struct ConnectionPlan {
     /// is the mechanism, not decoration: a reversibility claim that cannot say
     /// which of the two tiers it achieved is a claim nothing can check.
     pub restore: Option<RestoreTier>,
+    /// True when the receipt this plan writes -- or the receipt it is undoing
+    /// -- records that the manager took ownership of content it did not write.
+    pub adopted: bool,
+    /// A structural restore that nonetheless returned every byte it did not
+    /// own. See `json_span`.
+    pub formatting_preserved: bool,
     preview: String,
     original: Snapshot,
     receipt_original: Snapshot,
-    updated: Option<Vec<u8>>,
+    write: TargetWrite,
     receipt_after: Option<OwnershipReceipt>,
     remove_backup: bool,
 }
@@ -297,15 +328,21 @@ impl ConnectionPlan {
         // temp-file-plus-rename and `atomic_remove` is a single unlink, so
         // neither can leave a half-written file, and the error path restores
         // from `self.original` in memory rather than from disk.
-        if self.restore.is_none() {
+        // `TargetWrite::Leave` is excluded for a reason that is not merely an
+        // optimisation: an adoption writes NOTHING to the target, so there are
+        // no pre-modification bytes for a backup to hold. Minting one would
+        // leave a stray copy of the user's own file beside it, named after the
+        // manager, for a command that changed nothing.
+        if self.restore.is_none() && !self.write.is_leave() {
             write_bounded_backup(&self.target, &self.original)?;
         }
 
-        match self.updated.as_deref() {
-            Some(bytes) => {
+        match &self.write {
+            TargetWrite::Write(bytes) => {
                 atomic_write(&self.target, bytes, self.original.unix_mode.or(Some(0o600)))?;
             }
-            None => atomic_remove(&self.target)?,
+            TargetWrite::Remove => atomic_remove(&self.target)?,
+            TargetWrite::Leave => {}
         }
 
         let receipt_result = match &self.receipt_after {
@@ -313,7 +350,7 @@ impl ConnectionPlan {
             None => atomic_remove(&self.receipt_path),
         };
         if let Err(error) = receipt_result {
-            let expected = snapshot_for_updated(self.updated.as_deref(), self.original.unix_mode);
+            let expected = snapshot_for_write(&self.write, &self.original);
             if assert_unchanged(
                 &self.target,
                 &expected,
@@ -338,10 +375,37 @@ impl ConnectionPlan {
         // `<file>.kaleidoscope-lock` and is only unlinked on drop, so pruning
         // while it is held finds a directory that is never empty.
         drop(lock);
-        if self.updated.is_none() {
+        // Only on a REMOVE. `Leave` must never reach here: pruning after an
+        // adoption teardown would delete `use-kaleidoscope/` and possibly
+        // `skills/` around a file the manager deliberately left in place.
+        if self.write.is_remove() {
             prune_empty_managed_directories(&self.target);
         }
         Ok(())
+    }
+
+    /// The backup path IF a backup will be there when this returns, else `None`.
+    ///
+    /// It used to be `self.backup_path` unconditionally -- a path the plan
+    /// merely KNOWS, printed whether or not a file exists at it. On an adopt
+    /// run all three steps named a `.kaleidoscope-backup` that was never
+    /// created (adoption writes nothing to the target, so there are no
+    /// pre-modification bytes for a backup to hold), and a caller could not
+    /// tell "restorable from a backup" from "not restorable".
+    ///
+    /// A real run reports the filesystem, because `summary` is called after
+    /// `apply`. A dry run reports the PREDICTION, because the file the flag is
+    /// asking about has not been written yet.
+    fn backup_after(&self, dry_run: bool) -> Option<&std::path::Path> {
+        if dry_run && self.restore.is_none() && !self.write.is_leave() {
+            return Some(self.backup_path.as_path());
+        }
+        if dry_run && self.remove_backup {
+            return None;
+        }
+        self.backup_path
+            .exists()
+            .then_some(self.backup_path.as_path())
     }
 
     #[must_use]
@@ -355,15 +419,38 @@ impl ConnectionPlan {
             "profile": self.profile,
             "target": self.target,
             "owner_receipt": self.receipt_path,
-            "backup": self.backup_path,
+            "backup": self.backup_after(dry_run),
         });
         if let Some(restore) = self.restore {
             value["restore"] = json!(restore);
             if restore == RestoreTier::Structural {
-                value["formatting"] = json!("normalized");
+                value["formatting"] = json!(if self.formatting_preserved {
+                    "preserved"
+                } else {
+                    "normalized"
+                });
             }
         }
+        if self.adopted {
+            value["adopted"] = json!(true);
+        }
+        if self.action == ChangeAction::Adopt {
+            value["detail"] = json!(
+                "existing content is byte-identical to the manager's; the owner receipt was written and no bytes were changed"
+            );
+        }
         value
+    }
+
+    /// The bytes this plan will leave on the target, for the pre-flight check.
+    #[must_use]
+    pub const fn writes_nothing(&self) -> bool {
+        self.write.is_leave()
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> &PathBuf {
+        &self.target
     }
 }
 
@@ -374,18 +461,71 @@ pub fn host_config_path(host: Host, scope: Scope, home: &Path, project: &Path) -
             reason: "home and project roots must be absolute",
         });
     }
+    // The USER-scope arms honour each harness's own configuration-directory
+    // override. Project-scope arms deliberately do not: a project's files live
+    // in the project, and an environment variable that moved them would put
+    // shared, version-controlled configuration outside the checkout.
     Ok(match (host, scope) {
-        (Host::Codex, Scope::User) => home.join(".codex").join("config.toml"),
+        (Host::Codex, Scope::User) => codex_home(home)?.join("config.toml"),
         (Host::Codex, Scope::Project) => project.join(".codex").join("config.toml"),
-        (Host::ClaudeCode, Scope::User) => home.join(".claude.json"),
+        (Host::ClaudeCode, Scope::User) => claude_config_dir(home)?.join(".claude.json"),
         (Host::ClaudeCode, Scope::Project) => project.join(".mcp.json"),
         (Host::Cursor, Scope::User) => home.join(".cursor").join("mcp.json"),
         (Host::Cursor, Scope::Project) => project.join(".cursor").join("mcp.json"),
-        (Host::OpenCode, Scope::User) => {
-            home.join(".config").join("opencode").join("opencode.json")
-        }
+        (Host::OpenCode, Scope::User) => xdg_config_home(home)?
+            .join("opencode")
+            .join("opencode.json"),
         (Host::OpenCode, Scope::Project) => project.join("opencode.json"),
     })
+}
+
+/// `read_snapshot` for a host configuration, with a message a person can act on.
+///
+/// The generic refusal is `unsafe host configuration path: not a bounded
+/// regular file`, which conflates "too big" with "not a regular file" and names
+/// neither the size nor a way forward. That was tolerable while user scope was
+/// opt-in. It is not tolerable now that `~/.claude.json` -- Claude Code's own
+/// live configuration, measured at 152,109 bytes here and growing, against a
+/// 1 MiB cap -- is the default target.
+fn read_host_config(path: &Path, host: Host, scope: Scope) -> Result<Snapshot> {
+    match read_snapshot(path, MAX_HOST_CONFIG_BYTES, "host configuration") {
+        Err(ManagerError::UnsafePath {
+            reason: "not a bounded regular file",
+            ..
+        }) => {
+            let size = std::fs::symlink_metadata(path).map(|meta| meta.len()).ok();
+            Err(match size {
+                Some(size) if size > MAX_HOST_CONFIG_BYTES => {
+                    // The remedy names the host the caller actually asked for.
+                    // It used to say `--host HOST`, which exits 2 with "host
+                    // must be codex, claude-code, cursor, or opencode" when
+                    // copied -- a refusal handing out a dead end, which is the
+                    // exact failure mode adoption was introduced to remove.
+                    //
+                    // `--scope project` is only a way forward when the caller
+                    // was in user scope; in project scope the oversized file IS
+                    // the project one, so the only move is to trim it.
+                    let alternative = if scope == Scope::User {
+                        format!(
+                            "\nWays forward:\n  put the entry in the project instead\n      kaleidoscope init --host {} --scope project\n  or trim the file by hand and re-run.",
+                            host.as_str()
+                        )
+                    } else {
+                        "\nWay forward:\n  trim the file by hand and re-run.".to_owned()
+                    };
+                    ManagerError::HostConfigTooLarge(format!(
+                        "{} is {size} bytes, over the {MAX_HOST_CONFIG_BYTES}-byte limit this manager will read and rewrite whole, so nothing was changed. The limit exists because every edit re-encodes the entire document, and a partial write of a harness's live configuration is not recoverable.{alternative}",
+                        path.display()
+                    ))
+                }
+                _ => ManagerError::UnsafePath {
+                    target: "host configuration",
+                    reason: "not a bounded regular file",
+                },
+            })
+        }
+        other => other,
+    }
 }
 
 pub fn plan_connect(
@@ -448,7 +588,7 @@ pub fn plan_connect_at_version(
     let target = host_config_path(host, scope, home, project)?;
     let receipt_path = sibling_path(&target, ".kaleidoscope-owner.json")?;
     let backup_path = sibling_path(&target, ".kaleidoscope-backup")?;
-    let original = read_snapshot(&target, MAX_HOST_CONFIG_BYTES, "host configuration")?;
+    let original = read_host_config(&target, host, scope)?;
     let receipt_original =
         read_snapshot(&receipt_path, MAX_RECEIPT_BYTES, "connection owner receipt")?;
     let old_receipt = decode_receipt(&receipt_original, host, scope)?;
@@ -502,7 +642,7 @@ pub fn plan_disconnect_at(
     let target = host_config_path(host, scope, home, project)?;
     let receipt_path = sibling_path(&target, ".kaleidoscope-owner.json")?;
     let backup_path = sibling_path(&target, ".kaleidoscope-backup")?;
-    let original = read_snapshot(&target, MAX_HOST_CONFIG_BYTES, "host configuration")?;
+    let original = read_host_config(&target, host, scope)?;
     let receipt_original =
         read_snapshot(&receipt_path, MAX_RECEIPT_BYTES, "connection owner receipt")?;
     let receipt = decode_receipt(&receipt_original, host, scope)?;
@@ -545,7 +685,11 @@ pub fn inspect_owned_connection(
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 fn plan_codex_connect(
     host: Host,
     scope: Scope,
@@ -561,10 +705,90 @@ fn plan_codex_connect(
     let text = snapshot_text(&original)?;
     validate_codex_document(&text)?;
     let current_block = find_codex_block(&text)?;
+    // NEVER ADOPTABLE, and it keeps refusing. Adoption requires a delimited
+    // region the manager can later remove exactly; an undelimited TOML table
+    // is not one, so there is no span a teardown could take back out. Only the
+    // message changes: it now says what to do next.
     if current_block.is_none() && contains_unmanaged_codex_table(&text) {
-        return Err(ManagerError::HostConflict(
-            "an unmanaged mcp_servers.kaleidoscope table already exists".to_owned(),
-        ));
+        return Err(ManagerError::HostConflict(format!(
+            "{} contains an [mcp_servers.kaleidoscope] table that is not inside a manager marker block, so the manager cannot tell where its own text would end and yours begins. Nothing was changed.\nWays forward:\n  wire everything except the MCP entry\n      kaleidoscope init --host codex --no-connect\n  delete the [mcp_servers.kaleidoscope] table from {} by hand, then re-run.",
+            target.display(),
+            target.display()
+        )));
+    }
+    // `desired` is computed BEFORE the ownership check, which is the only
+    // reordering adoption needs here: the check refuses the no-receipt case,
+    // and adoption has to be able to look at the content first.
+    let desired = codex_block(descriptor, profile)?;
+    // ADOPTION. The marker block already in the file is exactly the one this
+    // manager writes. Take ownership by writing the receipt; touch no bytes.
+    if old_receipt.is_none() && current_block.as_deref() == Some(desired.as_str()) {
+        let receipt = OwnershipReceipt::new(
+            host,
+            scope,
+            profile,
+            OwnedFormat::CodexMarkerBlock,
+            Value::String(desired.clone()),
+            false,
+            None,
+            original.sha256.clone(),
+            original.sha256.clone(),
+            true,
+        )?;
+        return Ok(ConnectionPlan {
+            host,
+            scope,
+            action: ChangeAction::Adopt,
+            profile: Some(profile.to_owned()),
+            preview: format!(
+                "Adopt the existing {} marker block at {} (byte-identical to this manager's; nothing will be written to the file)\nOwned marker block:\n{}",
+                host.as_str(),
+                target.display(),
+                desired
+            ),
+            target,
+            receipt_path,
+            backup_path,
+            original,
+            receipt_original,
+            restore: None,
+            adopted: true,
+            formatting_preserved: false,
+            write: TargetWrite::Leave,
+            receipt_after: Some(receipt),
+            remove_backup: false,
+        });
+    }
+    // A marker block with NO receipt that is not byte-identical to `desired`.
+    //
+    // Without this arm the call below lands in `validate_current_ownership`'s
+    // `(None, Some(current))` catch-all and reports `InvalidOwnerReceipt`,
+    // whose message tells the user to "delete the Kaleidoscope entry and its
+    // `*.kaleidoscope-owner.json` receipt beside it by hand" -- naming a
+    // receipt that, in this state, does not exist. Measured: a user who
+    // hand-edits inside the block and then follows that remedy by deleting the
+    // receipt gets the IDENTICAL message back, now naming a file they have
+    // already removed. The message is a fixed point: following it can never
+    // satisfy it, because the blocker is the block, not the receipt.
+    //
+    // The two sibling paths already do this correctly -- `instructions.rs`
+    // refuses a receiptless differing block by naming `--no-instructions`, and
+    // the JSON hosts refuse through `unmanaged_json_entry_message`, which names
+    // `--no-connect`. This is the same refusal for the one shape that lacked
+    // it. It stays a REFUSAL: the content differs, so adoption must not take
+    // it. Only the remedy becomes true and reachable.
+    //
+    // `--force` deliberately does not appear here. The block is delimited by
+    // the manager's own markers, so a forced overwrite would be provably
+    // bounded -- but `run_init` parses no such flag for the connect step, and
+    // naming a flag the command cannot accept is the very defect being fixed.
+    if old_receipt.is_none() && current_block.is_some() {
+        return Err(ManagerError::HostConflict(format!(
+            "{} contains a Kaleidoscope marker block that differs from this version's, and it carries no manager owner receipt. Nothing was changed.\nWays forward:\n  keep your block and wire everything else\n      kaleidoscope init --host {} --no-connect\n  delete the marker block (from the `>>> kaleidoscope-manager` line to the `<<< kaleidoscope-manager` line) from {} by hand, then re-run.\nIf you make the block byte-identical to this manager's, a re-run will adopt it in place and write only the owner receipt.",
+            target.display(),
+            host.as_str(),
+            target.display()
+        )));
     }
     validate_current_ownership(
         old_receipt.as_ref(),
@@ -573,7 +797,6 @@ fn plan_codex_connect(
             .map(|block| Value::String(block.to_owned())),
         OwnedFormat::CodexMarkerBlock,
     )?;
-    let desired = codex_block(descriptor, profile)?;
     if current_block.as_deref() == Some(desired.as_str()) {
         return no_change_plan(
             host,
@@ -586,6 +809,7 @@ fn plan_codex_connect(
             original,
             receipt_original,
             desired,
+            old_receipt.as_ref().is_some_and(|receipt| receipt.adopted),
         );
     }
     let action = if current_block.is_some() {
@@ -609,6 +833,7 @@ fn plan_codex_connect(
             }
         },
     );
+    let adopted = old_receipt.as_ref().is_some_and(|receipt| receipt.adopted);
     let receipt = OwnershipReceipt::new(
         host,
         scope,
@@ -619,6 +844,7 @@ fn plan_codex_connect(
         None,
         pre_sha256,
         digest_bytes(&updated_bytes),
+        adopted,
     )?;
     Ok(ConnectionPlan {
         host,
@@ -638,14 +864,30 @@ fn plan_codex_connect(
         original,
         receipt_original,
         restore: None,
-        updated: Some(updated_bytes),
+        adopted,
+        formatting_preserved: false,
+        write: TargetWrite::Write(updated_bytes),
         receipt_after: Some(receipt),
         remove_backup: false,
     })
 }
 
+/// How the preview describes the restore it is about to perform.
+///
+/// Three outcomes, not two: byte-identical, structural-but-byte-preserving
+/// (the entry's own bytes were cut out and nothing else moved), and
+/// structural-and-normalized (the whole document was re-encoded). The middle
+/// one used to be reported as the third, which understated it -- and the third
+/// is the one a user with a hand-formatted file needs to see coming.
+const fn restore_words(restore: RestoreTier, formatting_preserved: bool) -> &'static str {
+    match (restore, formatting_preserved) {
+        (RestoreTier::ByteIdentical, _) => "exact restore",
+        (_, true) => "structural restore; every byte outside the entry preserved",
+        (_, false) => "structural restore; formatting normalized",
+    }
+}
 
-/// The two-tier restore, shared by both disconnect planners.
+/// The two- (now three-) tier restore, shared by both disconnect planners.
 ///
 /// TIER 1, EXACT. The target is still byte-for-byte what the manager wrote, and
 /// either the manager created it or the backup holds exactly the pre-connect
@@ -666,12 +908,27 @@ fn resolve_restore(
     backup_path: &Path,
     original: &Snapshot,
     receipt: &OwnershipReceipt,
-    structural: Option<Vec<u8>>,
-) -> Result<(RestoreTier, Option<Vec<u8>>, bool)> {
+    structural: TargetWrite,
+) -> Result<(RestoreTier, TargetWrite, bool)> {
     let _ = target;
-    let backup = read_snapshot(backup_path, MAX_HOST_CONFIG_BYTES, "host configuration backup")?;
-    let file_is_ours =
-        !receipt.post_sha256.is_empty() && original.sha256 == receipt.post_sha256;
+    // ADOPTION BYPASSES TIER 1, and it must.
+    //
+    // For an adopted entry `post_sha256` is the untouched file, so `file_is_
+    // ours` holds and `config_created` is false while `backup_is_pre` holds
+    // too (pre == post) -- Tier 1 would fire and restore "the pre-connect
+    // bytes", which for an adoption are the bytes WITH the entry still in
+    // them. Byte-exact restore is not merely wrong here, it is impossible: the
+    // desired end state, the file minus an entry it always had, has never
+    // existed on disk. Take the structural path and say so.
+    if receipt.adopted {
+        return Ok((RestoreTier::Structural, structural, false));
+    }
+    let backup = read_snapshot(
+        backup_path,
+        MAX_HOST_CONFIG_BYTES,
+        "host configuration backup",
+    )?;
+    let file_is_ours = !receipt.post_sha256.is_empty() && original.sha256 == receipt.post_sha256;
     let backup_is_pre = backup.bytes.is_some()
         && !receipt.pre_sha256.is_empty()
         && backup.sha256 == receipt.pre_sha256;
@@ -690,9 +947,13 @@ fn resolve_restore(
             // `opencode.json.kaleidoscope-backup` all survived a teardown that
             // reported `restore: byte_identical`, each naming the profile and
             // the absolute engine path.
-            (RestoreTier::ByteIdentical, None, true)
+            (RestoreTier::ByteIdentical, TargetWrite::Remove, true)
         } else {
-            (RestoreTier::ByteIdentical, backup.bytes, true)
+            (
+                RestoreTier::ByteIdentical,
+                backup.bytes.map_or(TargetWrite::Remove, TargetWrite::Write),
+                true,
+            )
         });
     }
     Ok((RestoreTier::Structural, structural, false))
@@ -729,6 +990,7 @@ fn plan_codex_disconnect(
             original,
             receipt_original,
             String::new(),
+            false,
         );
     };
     validate_current_ownership(
@@ -737,13 +999,16 @@ fn plan_codex_disconnect(
         OwnedFormat::CodexMarkerBlock,
     )?;
     let owned = current.ok_or(ManagerError::InvalidOwnerReceipt)?;
-    let removed = remove_codex_block(&text, &owned)?;
+    let removed = remove_codex_block(&text, &owned, !receipt.adopted)?;
+    // A file the manager did not create is never deleted, even when removing
+    // the block empties it.
     let structural = if receipt.config_created && removed.trim().is_empty() {
-        None
+        TargetWrite::Remove
     } else {
-        Some(removed.into_bytes())
+        TargetWrite::Write(removed.into_bytes())
     };
-    let (restore, updated, remove_backup) =
+    let adopted = receipt.adopted;
+    let (restore, write, remove_backup) =
         resolve_restore(&target, &backup_path, &original, &receipt, structural)?;
     Ok(ConnectionPlan {
         host,
@@ -754,26 +1019,33 @@ fn plan_codex_disconnect(
             "Remove the manager-owned {} block from {} ({})\nOwned marker block:\n{}",
             host.as_str(),
             target.display(),
-            if restore == RestoreTier::ByteIdentical {
-                "exact restore"
-            } else {
-                "structural restore; formatting normalized"
-            },
+            restore_words(restore, true),
             owned
         ),
         target,
         receipt_path,
         backup_path,
         restore: Some(restore),
+        adopted,
+        // `remove_codex_block` is a textual cut from the original document, so
+        // the Codex structural tier has ALWAYS been byte-preserving outside the
+        // marker block. It reported "formatting normalized" anyway, which
+        // understated it in the one place the manager was already doing the
+        // right thing.
+        formatting_preserved: true,
         original,
         receipt_original,
-        updated,
+        write,
         receipt_after: None,
         remove_backup,
     })
 }
 
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 fn plan_json_connect(
     host: Host,
     scope: Scope,
@@ -808,12 +1080,19 @@ fn plan_json_connect(
 
     if let Some(receipt) = old_receipt.as_ref() {
         validate_current_ownership(Some(receipt), current.clone(), OwnedFormat::JsonEntry)?;
-    } else if host == Host::OpenCode && current.as_ref() == Some(&desired) {
+    } else if current.as_ref() == Some(&desired) {
+        // ADOPTION. The entry already in the file is exactly the one this
+        // manager writes, so doing nothing already produces the desired state
+        // and the only thing missing is the receipt.
+        //
+        // The `host == Host::OpenCode &&` qualifier that used to guard this was
+        // never a property of OpenCode; it was where the idea got written down
+        // first. The discriminator for MODIFYING content stays the receipt --
+        // content equality unlocks ADOPTION only, and adoption writes nothing.
         action = ChangeAction::Adopt;
     } else if current.is_some() {
-        return Err(ManagerError::HostConflict(format!(
-            "an unmanaged {} Kaleidoscope entry already exists",
-            host.as_str()
+        return Err(ManagerError::HostConflict(unmanaged_json_entry_message(
+            host, &target, path, &desired,
         )));
     }
 
@@ -829,21 +1108,31 @@ fn plan_json_connect(
             original,
             receipt_original,
             serde_json::to_string_pretty(&desired).unwrap_or_default(),
+            old_receipt.as_ref().is_some_and(|receipt| receipt.adopted),
         );
     }
 
-    let updated = if action == ChangeAction::Adopt {
-        original
-            .bytes
-            .clone()
-            .ok_or_else(|| ManagerError::HostConflict("cannot adopt an absent entry".to_owned()))?
+    let (write, post_sha256) = if action == ChangeAction::Adopt {
+        // NOT `TargetWrite::Write(original.bytes)`. Rewriting identical bytes
+        // touches mtime, and on the `~/.claude.json` default path it would
+        // re-serialise 152 KB of Claude Code's live state -- losing its
+        // indentation -- for a command that changed nothing.
+        if original.bytes.is_none() {
+            return Err(ManagerError::HostConflict(
+                "cannot adopt an absent entry".to_owned(),
+            ));
+        }
+        (TargetWrite::Leave, original.sha256.clone())
     } else {
         set_json_path(&mut document, path, desired.clone())?;
-        encode_json_document(&document)?
+        let encoded = encode_json_document(&document)?;
+        let digest = digest_bytes(&encoded);
+        (TargetWrite::Write(encoded), digest)
     };
-    let config_created = old_receipt
-        .as_ref()
-        .map_or(original.bytes.is_none(), |receipt| receipt.config_created);
+    let config_created = action != ChangeAction::Adopt
+        && old_receipt
+            .as_ref()
+            .map_or(original.bytes.is_none(), |receipt| receipt.config_created);
     let pre_sha256 = old_receipt.as_ref().map_or_else(
         || original.sha256.clone(),
         |receipt| {
@@ -854,6 +1143,10 @@ fn plan_json_connect(
             }
         },
     );
+    // Sticky, exactly as `config_created` is: an Update over an adopted entry
+    // stays adopted, because the pre-manager state DID already include it.
+    let adopted = action == ChangeAction::Adopt
+        || old_receipt.as_ref().is_some_and(|receipt| receipt.adopted);
     let receipt = OwnershipReceipt::new(
         host,
         scope,
@@ -863,27 +1156,39 @@ fn plan_json_connect(
         config_created,
         open_code_version,
         pre_sha256,
-        digest_bytes(&updated),
+        post_sha256,
+        adopted,
     )?;
     Ok(ConnectionPlan {
         host,
         scope,
         action,
         profile: Some(profile.to_owned()),
-        preview: format!(
-            "{} {} configuration at {}\nOwned structured entry:\n{}",
-            action_word(action),
-            host.as_str(),
-            target.display(),
-            serde_json::to_string_pretty(&desired).unwrap_or_default()
-        ),
+        preview: if action == ChangeAction::Adopt {
+            format!(
+                "Adopt the existing {} entry at {} (byte-identical to this manager's; nothing will be written to the file)\nOwned structured entry:\n{}",
+                host.as_str(),
+                target.display(),
+                serde_json::to_string_pretty(&desired).unwrap_or_default()
+            )
+        } else {
+            format!(
+                "{} {} configuration at {}\nOwned structured entry:\n{}",
+                action_word(action),
+                host.as_str(),
+                target.display(),
+                serde_json::to_string_pretty(&desired).unwrap_or_default()
+            )
+        },
         target,
         receipt_path,
         backup_path,
         original,
         receipt_original,
         restore: None,
-        updated: Some(updated),
+        adopted,
+        formatting_preserved: false,
+        write,
         receipt_after: Some(receipt),
         remove_backup: false,
     })
@@ -924,6 +1229,7 @@ fn plan_json_disconnect(
             original,
             receipt_original,
             String::new(),
+            false,
         );
     };
     let path = json_entry_path(host, receipt.open_code_version);
@@ -943,15 +1249,40 @@ fn plan_json_disconnect(
     }
     validate_current_ownership(Some(&receipt), current.clone(), OwnedFormat::JsonEntry)?;
     let owned = current.ok_or(ManagerError::InvalidOwnerReceipt)?;
+    let before = document.clone();
     remove_json_path(&mut document, path)?;
+    // `config_created` is false for every adoption, so removing the entry from
+    // a hand-written file that held only ours leaves `{"mcpServers": {}}`
+    // rather than deleting the file. Untidy; never destructive.
+    let mut formatting_preserved = false;
     let structural = if receipt.config_created
         && json_document_is_empty_shell(host, receipt.open_code_version, &document)
     {
-        None
+        TargetWrite::Remove
     } else {
-        Some(encode_json_document(&document)?)
+        // BYTE-PRESERVING FIRST, RE-ENCODE ONLY AS A FALLBACK.
+        //
+        // `encode_json_document` rewrites the whole file in the manager's own
+        // pretty form. On a file the manager wrote that is a no-op; on an
+        // ADOPTED one -- the entry was hand-written, so the manager has never
+        // touched a byte of it -- it reformats entries the manager does not
+        // own and never did. `json_span::excise` cuts the entry's exact bytes
+        // out instead and PROVES the result by re-parsing it against the
+        // document this function just computed, so the fallback is the old
+        // behaviour rather than a risk.
+        let excised = snapshot_text(&original)
+            .ok()
+            .and_then(|text| crate::json_span::excise(&text, &before, &document));
+        match excised {
+            Some(text) => {
+                formatting_preserved = true;
+                TargetWrite::Write(text.into_bytes())
+            }
+            None => TargetWrite::Write(encode_json_document(&document)?),
+        }
     };
-    let (restore, updated, remove_backup) =
+    let adopted = receipt.adopted;
+    let (restore, write, remove_backup) =
         resolve_restore(&target, &backup_path, &original, &receipt, structural)?;
     Ok(ConnectionPlan {
         host,
@@ -962,20 +1293,18 @@ fn plan_json_disconnect(
             "Remove the manager-owned {} entry from {} ({})\nOwned structured entry:\n{}",
             host.as_str(),
             target.display(),
-            if restore == RestoreTier::ByteIdentical {
-                "exact restore"
-            } else {
-                "structural restore; formatting normalized"
-            },
+            restore_words(restore, formatting_preserved),
             serde_json::to_string_pretty(&owned).unwrap_or_default()
         ),
         target,
         receipt_path,
         backup_path,
         restore: Some(restore),
+        adopted,
+        formatting_preserved,
         original,
         receipt_original,
-        updated,
+        write,
         receipt_after: None,
         remove_backup,
     })
@@ -994,7 +1323,16 @@ fn no_change_plan(
     original: Snapshot,
     receipt_original: Snapshot,
     preview_owned: String,
+    adopted: bool,
 ) -> Result<ConnectionPlan> {
+    // A DEFENSIVE ASSERT WITH NO REACHABLE TRIGGER, kept deliberately.
+    //
+    // "A matching entry with no receipt" is exactly the state the `Adopt`
+    // branches in `plan_json_connect` and `plan_codex_connect` now intercept,
+    // so no caller can arrive here in it. It stays because the invariant it
+    // states -- `AlreadyConnected` implies a receipt -- is what makes the rest
+    // of this module's reasoning about ownership sound, and an assertion that
+    // cannot fire is cheaper than a comment saying it cannot.
     if action == ChangeAction::AlreadyConnected && receipt_original.bytes.is_none() {
         return Err(ManagerError::HostConflict(
             "a matching entry exists but has no manager owner receipt".to_owned(),
@@ -1023,9 +1361,15 @@ fn no_change_plan(
         receipt_path,
         backup_path,
         restore: None,
+        adopted,
+        formatting_preserved: false,
         original,
         receipt_original,
-        updated: None,
+        // NOT `Remove`. This plan is a no-op and `apply` returns before it is
+        // read, but a value that would DELETE the user's configuration is the
+        // wrong thing to leave sitting in a struct field guarded only by an
+        // early return somewhere else.
+        write: TargetWrite::Leave,
         receipt_after: None,
         remove_backup: false,
     })
@@ -1085,6 +1429,40 @@ fn validate_current_ownership(
         }
         _ => Err(ManagerError::InvalidOwnerReceipt),
     }
+}
+
+/// The refusal a user sees when a foreign Kaleidoscope entry is in the way.
+///
+/// NO `--force` IS ADDED TO THE HOST-CONFIG PLANNERS, and that is a decision
+/// rather than an omission. An instruction block is delimited by the manager's
+/// own markers, so forcing there discards bytes that are provably inside its
+/// own region, and they are disclosed and backed up first. A foreign
+/// `mcpServers.kaleidoscope` entry has no such proof -- it may be another
+/// tool's, or a hand-tuned command line -- and discarding it is unrecoverable.
+/// The manual remedy is one action, is reversible by the user, and is spelled
+/// out here with the exact path and key.
+fn unmanaged_json_entry_message(
+    host: Host,
+    target: &Path,
+    path: &[&str],
+    desired: &Value,
+) -> String {
+    let full = path.join(".");
+    let parent = path
+        .split_last()
+        .map_or_else(String::new, |(_, parents)| parents.join("."));
+    let rendered = serde_json::to_string_pretty(desired)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{} already contains a \"{full}\" entry that is not the one this manager writes, and it carries no manager owner receipt. The manager will not edit an entry it cannot prove it wrote. Nothing was changed.\nWays forward:\n  wire everything except the MCP entry\n      kaleidoscope init --host {} --no-connect\n  hand the entry over: delete the \"kaleidoscope\" key under \"{parent}\" in {}, then re-run -- or make it byte-identical to this, which a re-run will adopt in place:\n{rendered}",
+        target.display(),
+        host.as_str(),
+        target.display(),
+    )
 }
 
 fn owned_digest(format: OwnedFormat, owned: &Value) -> Result<String> {
@@ -1423,7 +1801,20 @@ fn install_codex_block(text: &str, current: Option<&str>, desired: &str) -> Resu
     Ok(format!("{text}{separator}{desired}"))
 }
 
-fn remove_codex_block(text: &str, block: &str) -> Result<String> {
+/// Take the owned block back out, and the separator with it -- but ONLY the
+/// separator the manager itself inserted.
+///
+/// `inserted_separator` is false for an adopted block. `install_codex_block`
+/// puts a `"\n"` before the block when the file did not already end in a blank
+/// line, and this used to swallow one newline unconditionally to match. For a
+/// block the manager NEVER INSERTED that is not symmetry, it is eating a byte
+/// of the user's file -- measured: a hand-written `config.toml` came back one
+/// newline shorter after adopt-then-teardown.
+///
+/// `instructions.rs` records the separator in the receipt for exactly this
+/// reason ("two heuristics that must agree become one recorded fact"). This is
+/// the same fix with the one bit the Codex receipt actually needs.
+fn remove_codex_block(text: &str, block: &str, inserted_separator: bool) -> Result<String> {
     let Some(start) = text.find(block) else {
         return Err(ManagerError::InvalidOwnerReceipt);
     };
@@ -1431,7 +1822,7 @@ fn remove_codex_block(text: &str, block: &str) -> Result<String> {
         return Err(ManagerError::InvalidOwnerReceipt);
     }
     let mut removal_start = start;
-    if start >= 2 && &text[start - 2..start] == "\n\n" {
+    if inserted_separator && start >= 2 && &text[start - 2..start] == "\n\n" {
         removal_start -= 1;
     }
     let mut result = String::with_capacity(text.len() - (start + block.len() - removal_start));
@@ -1450,14 +1841,21 @@ fn action_word(action: ChangeAction) -> &'static str {
     }
 }
 
-fn snapshot_for_updated(bytes: Option<&[u8]>, unix_mode: Option<u32>) -> Snapshot {
-    match bytes {
-        Some(bytes) => Snapshot {
-            bytes: Some(bytes.to_vec()),
+/// What the target should look like immediately after `apply` wrote it.
+///
+/// The `Leave` arm answers with the ORIGINAL, and that arm is load-bearing:
+/// this snapshot is what the receipt-write error path compares against before
+/// deciding whether it is safe to restore, and an adoption's "after" state is
+/// its "before" state.
+fn snapshot_for_write(write: &TargetWrite, original: &Snapshot) -> Snapshot {
+    match write {
+        TargetWrite::Write(bytes) => Snapshot {
+            bytes: Some(bytes.clone()),
             sha256: digest_bytes(bytes),
-            unix_mode,
+            unix_mode: original.unix_mode,
         },
-        None => Snapshot::absent(),
+        TargetWrite::Remove => Snapshot::absent(),
+        TargetWrite::Leave => original.clone(),
     }
 }
 
@@ -2154,6 +2552,240 @@ mod tests {
             "token-secret",
         ] {
             assert!(!published.contains(secret));
+        }
+    }
+}
+
+#[cfg(test)]
+mod adoption_tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn descriptor(root: &Path) -> LaunchDescriptor {
+        let engine = root.join("kscope");
+        fs::write(&engine, b"fixture").unwrap();
+        LaunchDescriptor {
+            version: 1,
+            transport: "stdio".to_owned(),
+            command: engine,
+            args: vec![
+                "mcp".to_owned(),
+                "--profile".to_owned(),
+                "default".to_owned(),
+            ],
+            tools: vec!["search".to_owned(), "remember".to_owned()],
+            environment: BTreeMap::new(),
+        }
+    }
+
+    fn environment(temp: &TempDir) -> (PathBuf, PathBuf) {
+        let home = temp.path().join("home");
+        let project = temp.path().join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        (
+            fs::canonicalize(home).unwrap(),
+            fs::canonicalize(project).unwrap(),
+        )
+    }
+
+    /// Every JSON host adopts an entry byte-identical to its own.
+    ///
+    /// The `host == Host::OpenCode` qualifier that used to guard this was never
+    /// a property of `OpenCode` -- it was where the idea got written down first --
+    /// so all three are asserted, and a per-host regression fails one arm.
+    #[test]
+    fn every_json_host_adopts_an_identical_entry_without_touching_the_file() {
+        for host in [Host::ClaudeCode, Host::Cursor, Host::OpenCode] {
+            let temp = TempDir::new().unwrap();
+            let (home, project) = environment(&temp);
+            let descriptor = descriptor(temp.path());
+            let version = (host == Host::OpenCode).then_some(OpenCodeVersion::StableV1);
+            let target = host_config_path(host, Scope::Project, &home, &project).unwrap();
+            let mut document = Value::Object(Map::new());
+            // A sibling key, so "the file survived" is distinguishable from
+            // "the file was rewritten with only our entry".
+            set_json_path(&mut document, &["zzz"], json!("keep me")).unwrap();
+            set_json_path(
+                &mut document,
+                json_entry_path(host, version),
+                desired_json_entry(host, &descriptor, version),
+            )
+            .unwrap();
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            // Hand-formatted: four-space indent, not the manager's encoding.
+            fs::write(
+                &target,
+                serde_json::to_string_pretty(&document).unwrap() + "\n",
+            )
+            .unwrap();
+            let before = digest_bytes(&fs::read(&target).unwrap());
+
+            let plan = plan_connect_at_version(
+                host,
+                Scope::Project,
+                "default",
+                &descriptor,
+                &home,
+                &project,
+                version,
+            )
+            .unwrap();
+            assert_eq!(plan.action, ChangeAction::Adopt, "{host:?}");
+            assert!(plan.adopted, "{host:?}");
+            assert_eq!(plan.write, TargetWrite::Leave, "{host:?}");
+            plan.apply().unwrap();
+            assert_eq!(
+                digest_bytes(&fs::read(&target).unwrap()),
+                before,
+                "{host:?}: adoption re-encoded the file"
+            );
+            assert!(
+                !sibling_path(&target, ".kaleidoscope-backup")
+                    .unwrap()
+                    .exists(),
+                "{host:?}: adoption wrote a backup"
+            );
+
+            // Teardown removes the ENTRY and keeps everything else.
+            let removal = plan_disconnect_at(host, Scope::Project, &home, &project).unwrap();
+            assert_eq!(removal.restore, Some(RestoreTier::Structural), "{host:?}");
+            removal.apply().unwrap();
+            let after: Value = serde_json::from_slice(&fs::read(&target).unwrap()).unwrap();
+            assert!(
+                get_json_path(&after, json_entry_path(host, version)).is_none(),
+                "{host:?}: the entry survived teardown"
+            );
+            assert_eq!(
+                after["zzz"],
+                json!("keep me"),
+                "{host:?}: a sibling key was lost"
+            );
+            assert!(target.exists(), "{host:?}: the file itself was deleted");
+        }
+    }
+
+    /// A DIFFERING entry still refuses, and the message names the flag that
+    /// proceeds plus the exact key to delete.
+    #[test]
+    fn a_differing_json_entry_refuses_and_names_the_way_forward() {
+        let temp = TempDir::new().unwrap();
+        let (home, project) = environment(&temp);
+        let descriptor = descriptor(temp.path());
+        let target = host_config_path(Host::ClaudeCode, Scope::Project, &home, &project).unwrap();
+        fs::write(
+            &target,
+            br#"{"mcpServers":{"kaleidoscope":{"command":"somewhere-else"}}}"#,
+        )
+        .unwrap();
+        let before = digest_bytes(&fs::read(&target).unwrap());
+        let rendered = plan_connect_at(
+            Host::ClaudeCode,
+            Scope::Project,
+            "default",
+            &descriptor,
+            &home,
+            &project,
+        )
+        .expect_err("a foreign entry must refuse")
+        .to_string();
+        assert!(rendered.contains("--no-connect"), "{rendered}");
+        assert!(rendered.contains("mcpServers.kaleidoscope"), "{rendered}");
+        assert!(
+            rendered.contains("delete the \"kaleidoscope\" key"),
+            "{rendered}"
+        );
+        assert_eq!(digest_bytes(&fs::read(&target).unwrap()), before);
+    }
+
+    /// Codex adopts an identical marker block, and teardown splices it out
+    /// leaving the REMAINDER BYTE-FOR-BYTE.
+    ///
+    /// The byte-for-byte half distinguishes the string-splice path from the
+    /// re-encode path, which the reported tier alone does not.
+    #[test]
+    fn codex_adopts_an_identical_block_and_the_remainder_survives_byte_for_byte() {
+        let temp = TempDir::new().unwrap();
+        let (home, project) = environment(&temp);
+        let descriptor = descriptor(temp.path());
+        let target = host_config_path(Host::Codex, Scope::Project, &home, &project).unwrap();
+        let mine = "model    =    \"o3\"\n# my own comment, oddly spaced\n\n";
+        let block = codex_block(&descriptor, "default").unwrap();
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, format!("{mine}{block}")).unwrap();
+        let before = digest_bytes(&fs::read(&target).unwrap());
+
+        let plan = plan_connect_at(
+            Host::Codex,
+            Scope::Project,
+            "default",
+            &descriptor,
+            &home,
+            &project,
+        )
+        .unwrap();
+        assert_eq!(plan.action, ChangeAction::Adopt);
+        assert_eq!(plan.write, TargetWrite::Leave);
+        plan.apply().unwrap();
+        assert_eq!(digest_bytes(&fs::read(&target).unwrap()), before);
+
+        let removal = plan_disconnect_at(Host::Codex, Scope::Project, &home, &project).unwrap();
+        removal.apply().unwrap();
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            mine,
+            "the remainder must be spliced, not re-encoded"
+        );
+    }
+
+    /// An UNMANAGED `[mcp_servers.kaleidoscope]` table is never adoptable --
+    /// there is no delimited region a teardown could take back out -- so it
+    /// keeps refusing, and the message names both ways forward.
+    #[test]
+    fn an_unmanaged_codex_table_is_not_adoptable_and_names_the_way_forward() {
+        let temp = TempDir::new().unwrap();
+        let (home, project) = environment(&temp);
+        let descriptor = descriptor(temp.path());
+        let target = host_config_path(Host::Codex, Scope::Project, &home, &project).unwrap();
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, "[mcp_servers.kaleidoscope]\ncommand = \"x\"\n").unwrap();
+        let rendered = plan_connect_at(
+            Host::Codex,
+            Scope::Project,
+            "default",
+            &descriptor,
+            &home,
+            &project,
+        )
+        .expect_err("an undelimited table must refuse")
+        .to_string();
+        assert!(rendered.contains("--no-connect"), "{rendered}");
+        assert!(rendered.contains("by hand"), "{rendered}");
+    }
+
+    /// Project scope NEVER moves with an environment variable.
+    ///
+    /// The user-scope arms honour `$CLAUDE_CONFIG_DIR`, `$CODEX_HOME` and
+    /// `$XDG_CONFIG_HOME` (asserted in `tests/manager_cli.rs`, where each case
+    /// gets its own child process -- `set_var` is process-global and this crate
+    /// forbids `unsafe`). The property worth pinning HERE is the other half: a
+    /// project's files live in the project, and no ambient variable may move
+    /// shared, version-controlled configuration outside the checkout.
+    #[test]
+    fn project_scope_paths_never_leave_the_project() {
+        let temp = TempDir::new().unwrap();
+        let (home, project) = environment(&temp);
+        for host in Host::ALL {
+            let path = host_config_path(host, Scope::Project, &home, &project).unwrap();
+            assert!(
+                path.starts_with(&project),
+                "{host:?} project-scope path escaped the project: {}",
+                path.display()
+            );
         }
     }
 }

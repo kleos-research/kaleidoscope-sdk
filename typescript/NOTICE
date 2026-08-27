@@ -18,14 +18,13 @@ specific language governing permissions and limitations under the License.
 SCOPE OF THIS LICENCE
 
 Apache-2.0 covers everything in this repository: the Rust manager
-(`kaleidoscope-manager`), the Python package (`kaleidoscope-memory`), the
+(`kaleidoscope-manager`), the Python package (`kscope-memory`), the
 TypeScript package (`@kleos-research/kaleidoscope`), the integration examples,
 the conformance probes, the reference goldens, and `skills/use-kaleidoscope`.
 
 It does NOT cover the `kscope` memory engine, or any other proprietary
 object-code payload delivered inside a platform package such as
-`@kleos-research/kaleidoscope-darwin-arm64` or
-`kaleidoscope-memory-native-darwin-arm64`. The engine is closed source, is not
+`@kleos-research/kaleidoscope-darwin-arm64`. The engine is closed source, is not
 part of this repository, and is not distributed under this licence. It is not
 licensed by this repository at all: separate terms apply to it, and putting
 those terms in front of the user is a precondition of first publication.

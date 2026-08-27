@@ -14,6 +14,7 @@ pub mod fs_safe;
 pub mod hooks;
 pub mod host;
 pub mod instructions;
+pub mod json_span;
 pub mod manager;
 pub mod model;
 

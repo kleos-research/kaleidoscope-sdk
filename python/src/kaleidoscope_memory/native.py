@@ -97,9 +97,9 @@ class Profile:
 
 def resolve_binary(candidate: str | Path | None = None, *, expected_sha256: str | None = None) -> str:
     if candidate is None:
-        from .distribution import installed_engine_path
+        from .distribution import locate_engine
 
-        candidate = installed_engine_path()
+        candidate = locate_engine().path
     command = _canonical_executable(str(candidate))
     if expected_sha256 is not None and executable_sha256(command) != expected_sha256.lower():
         raise DescriptorError("Kaleidoscope executable SHA-256 does not match the caller's pin")
@@ -108,9 +108,9 @@ def resolve_binary(candidate: str | Path | None = None, *, expected_sha256: str 
 
 def resolve_manager(candidate: str | Path | None = None, *, expected_sha256: str | None = None) -> str:
     if candidate is None:
-        from .distribution import installed_manager_path
+        from .distribution import locate_manager
 
-        candidate = installed_manager_path()
+        candidate = locate_manager().path
     command = _canonical_executable(str(candidate))
     if expected_sha256 is not None and executable_sha256(command) != expected_sha256.lower():
         raise DescriptorError("Kaleidoscope manager SHA-256 does not match the caller's pin")

@@ -94,6 +94,39 @@ pub struct LaunchDescriptor {
 }
 
 impl LaunchDescriptor {
+    /// The descriptor a profile WOULD get, without creating one.
+    ///
+    /// `--dry-run` is documented as "an effect-free plan", and it was not: the
+    /// vault and the profile were created before the flag was read, so a plan
+    /// asked for on a clean machine left 42 files and a real redb vault behind.
+    /// Making the flag honest means not calling the engine's `init-profile`,
+    /// and that in turn means the host previews have to come from somewhere.
+    ///
+    /// This is NOT a second source of truth for the entry shape. `validate`
+    /// immediately below is the authority, it is a CLOSED equality over every
+    /// field, and `provisional_descriptor_passes_validate` asserts that what
+    /// this builds is exactly what that accepts. If the engine's contract
+    /// moves, `validate` moves with it and the test fails here -- which is the
+    /// whole reason the constructor sits against the checker rather than in
+    /// the CLI that wants it.
+    pub fn provisional(engine: &std::path::Path, profile: &str) -> Result<Self> {
+        validate_profile_name(profile)?;
+        if !engine.is_absolute() {
+            return Err(ManagerError::UnsafePath {
+                target: "engine",
+                reason: "path must be absolute",
+            });
+        }
+        Ok(Self {
+            version: LAUNCH_DESCRIPTOR_VERSION,
+            transport: "stdio".to_owned(),
+            command: engine.to_path_buf(),
+            args: vec!["mcp".to_owned(), "--profile".to_owned(), profile.to_owned()],
+            tools: PUBLIC_TOOLS.iter().map(|tool| (*tool).to_owned()).collect(),
+            environment: BTreeMap::new(),
+        })
+    }
+
     pub fn validate(&self, expected_engine: &std::path::Path, profile: &str) -> Result<()> {
         validate_profile_name(profile)?;
         if self.version != LAUNCH_DESCRIPTOR_VERSION
