@@ -873,6 +873,47 @@ fn find_registration(cwd: &Path) -> Option<Registration> {
 /// as "no registration", which is the wrong finding.
 const MAX_HOST_CONFIG_PROBE_BYTES: u64 = 4 * 1024 * 1024;
 
+/// The marker the engine appends to every entitlement refusal, and the two
+/// identifiers behind it that are **self-healing**.
+///
+/// Both strings are fixed by `reference/entitlement-contract-v1.json`
+/// (`refusal_marker_prefix`, `refusal_identifiers`), the public contract both
+/// SDKs already assert. The Python client classifies on it; until now this
+/// manager did not, which is the whole defect this pair of functions closes.
+const ENTITLEMENT_REFUSAL_MARKER: &str = "kscope-entitlement-refusal: ";
+
+/// `E_UNVERIFIED` and `E_GRACE_EXPIRED` are the two refusals the *next call
+/// fixes by itself*: each one starts a revalidation, and the engine's own text
+/// for both ends in "run any gated command again". Every other identifier in
+/// the contract needs a human -- a key that was never set, revoked, expired,
+/// malformed, or a clock to correct -- and stays a relay.
+///
+/// The distinction matters because this hook writes into a model's system
+/// prompt. Reporting a self-healing refusal as a settled fact about the whole
+/// session is how an agent stops calling Kaleidoscope after one transient
+/// network gap, and it is not recoverable inside that session: nothing re-probes.
+const SELF_HEALING_REFUSALS: [&str; 2] = ["E_UNVERIFIED", "E_GRACE_EXPIRED"];
+
+/// Pull the entitlement identifier out of captured engine output.
+///
+/// Scans from the END, because the engine appends its marker last and
+/// `run_bounded` may have truncated a noisy stderr from the front -- the
+/// contract's own bounding test pins the marker as the final line.
+fn entitlement_refusal(detail: &str) -> Option<&str> {
+    detail.lines().rev().find_map(|line| {
+        line.trim()
+            .strip_prefix(ENTITLEMENT_REFUSAL_MARKER)
+            .map(str::trim)
+            .filter(|identifier| !identifier.is_empty())
+    })
+}
+
+/// True when the refusal will clear on its own, so the right instruction to a
+/// model is "call the tools anyway" rather than "the tools do not work".
+fn refusal_is_self_healing(identifier: &str) -> bool {
+    SELF_HEALING_REFUSALS.contains(&identifier)
+}
+
 /// What the MCP probe found. Every arm is reportable; none is an error.
 enum Probe {
     /// No `mcpServers.kaleidoscope` entry applies to this project at all, so
@@ -1350,7 +1391,20 @@ fn probe_facts(
     let probe_value = match probe {
         Probe::Unregistered => json!({"outcome": "unregistered"}),
         Probe::Unusable { detail } => json!({"outcome": "unusable", "detail": detail}),
-        Probe::NoAnswer { detail } => json!({"outcome": "no_answer", "detail": detail}),
+        Probe::NoAnswer { detail } => {
+            // The identifier rides alongside the raw detail rather than
+            // replacing it: the detail is what a person debugs with, the
+            // identifier is what a program branches on.
+            match entitlement_refusal(detail) {
+                Some(identifier) => json!({
+                    "outcome": "no_answer",
+                    "detail": detail,
+                    "entitlement_refusal": identifier,
+                    "self_healing": refusal_is_self_healing(identifier),
+                }),
+                None => json!({"outcome": "no_answer", "detail": detail}),
+            }
+        }
         Probe::Answered {
             protocol,
             server,
@@ -1443,7 +1497,7 @@ fn verdict_reason(
 
 /// The half a model reads. Status first, because a memory quoted under a false
 /// claim about how to reach more of them is worse than no memory at all.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_context(
     options: &SessionStartOptions,
     registration: Option<&Registration>,
@@ -1464,6 +1518,31 @@ fn render_context(
                 || "the registered server".to_owned(),
                 Registration::display_command
             )
+        );
+    } else if let Some(identifier) = match probe {
+        Probe::NoAnswer { detail } => entitlement_refusal(detail),
+        _ => None,
+    }
+    .filter(|identifier| refusal_is_self_healing(identifier))
+    {
+        // The self-healing case, and it must come FIRST in the paragraph.
+        // The old text opened "NOT usable in this session" and only hedged
+        // four lines later; a model reads the first sentence, believes it,
+        // and never reaches the hedge. Front-loading is the entire fix --
+        // the hedge was already there and did not work.
+        let _ = writeln!(
+            text,
+            "Kaleidoscope's tools are probably fine — CALL THEM. This probe was refused by a \
+             TRANSIENT entitlement check ({identifier}), which clears itself: the next gated \
+             call starts a fresh revalidation. If mcp__{SERVER_KEY}__search and \
+             mcp__{SERVER_KEY}__remember are in your tool list, use them normally and only \
+             fall back if a call actually fails. Nothing re-probes after this line, so treating \
+             it as a settled fact about the session is the one wrong move."
+        );
+        let _ = writeln!(
+            text,
+            "If a call does fail, the CLI is unaffected:\n  echo '{{\"query\":\"...\",\"top_k\":5}}' | kscope call --profile {} search",
+            options.profile
         );
     } else {
         let _ = writeln!(
@@ -2031,6 +2110,183 @@ mod tests {
             assert!(
                 text.contains("NOT usable"),
                 "the fault must be stated plainly: {text}"
+            );
+        }
+    }
+
+    /// Realistic captured stderr: the engine writes its prose, then
+    /// `AGENT_REMEDIATION`, then the marker as the final line.
+    fn refusal_stderr(identifier: &str) -> String {
+        format!(
+            "kscope: the alpha key in KALEIDOSCOPE_API_KEY could not be revalidated within the\n\
+             grace window.\n\
+             Reconnect to the network and run any gated command again.\n\
+             kscope-entitlement-refusal: {identifier}\n"
+        )
+    }
+
+    #[test]
+    fn the_marker_is_read_from_the_end_of_captured_output() {
+        assert_eq!(
+            entitlement_refusal(&refusal_stderr("E_GRACE_EXPIRED")),
+            Some("E_GRACE_EXPIRED")
+        );
+        // A stderr truncated from the FRONT still ends in the marker, which is
+        // why the scan runs backwards.
+        let flooded = format!("{}{}", "noise\n".repeat(500), refusal_stderr("E_REVOKED"));
+        assert_eq!(entitlement_refusal(&flooded), Some("E_REVOKED"));
+        // Output with no marker at all must not be mistaken for a refusal.
+        assert_eq!(
+            entitlement_refusal("the server returned no tools/list result"),
+            None
+        );
+        assert_eq!(entitlement_refusal("kscope-entitlement-refusal: "), None);
+    }
+
+    #[test]
+    fn only_the_two_recoverable_identifiers_are_self_healing() {
+        assert!(refusal_is_self_healing("E_UNVERIFIED"));
+        assert!(refusal_is_self_healing("E_GRACE_EXPIRED"));
+        for permanent in [
+            "E_NO_KEY",
+            "E_KEY_FILE_UNUSABLE",
+            "E_MALFORMED_KEY",
+            "E_UNKNOWN_KEY",
+            "E_REVOKED",
+            "E_KEY_EXPIRED",
+            "E_CLOCK_BACKWARDS",
+            "E_UNKNOWN",
+        ] {
+            assert!(
+                !refusal_is_self_healing(permanent),
+                "{permanent} needs a human and must stay a relay"
+            );
+        }
+    }
+
+    /// The defect this whole change exists for, asserted as a property of the
+    /// rendered text rather than of the classifier: a transient refusal must
+    /// not be reported as a settled fact about the session.
+    #[test]
+    fn a_self_healing_refusal_tells_the_model_to_call_the_tools() {
+        for identifier in ["E_UNVERIFIED", "E_GRACE_EXPIRED"] {
+            let text = render_context(
+                &options(),
+                None,
+                &Probe::NoAnswer {
+                    detail: refusal_stderr(identifier),
+                },
+                &Ok(()),
+                None,
+                &Memories::Empty,
+                false,
+                &json!({}),
+            );
+            assert!(
+                !text.contains("NOT usable"),
+                "{identifier} is recoverable and must not be reported as a settled fault: {text}"
+            );
+            assert!(
+                text.contains("CALL THEM"),
+                "{identifier} must instruct the model to try the tools: {text}"
+            );
+            assert!(
+                text.contains(identifier),
+                "the identifier itself must survive into the text: {text}"
+            );
+            // The lead sentence is the fix. A hedge further down is what the
+            // old text already had, and it did not work.
+            let lead = text
+                .lines()
+                .find(|line| line.contains("Kaleidoscope"))
+                .unwrap_or("");
+            assert!(
+                lead.contains("CALL THEM"),
+                "the instruction must be in the FIRST sentence about Kaleidoscope, not below it: {lead}"
+            );
+            assert!(
+                text.contains("kscope call --profile default search"),
+                "the fallback must still be reachable: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_permanent_refusal_is_still_reported_as_a_fault() {
+        let text = render_context(
+            &options(),
+            None,
+            &Probe::NoAnswer {
+                detail: refusal_stderr("E_REVOKED"),
+            },
+            &Ok(()),
+            None,
+            &Memories::Empty,
+            false,
+            &json!({}),
+        );
+        assert!(
+            text.contains("NOT usable"),
+            "a revoked key is not self-healing and must stay plain: {text}"
+        );
+    }
+
+    /// Binds both constants to the published cross-repo contract, so a code
+    /// added or renamed on the engine side cannot silently stop being
+    /// classified here. This is the check whose absence let the manager ship
+    /// knowing none of these identifiers while the Python client asserted all
+    /// of them.
+    #[test]
+    fn the_classifier_matches_the_published_entitlement_contract() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("reference/entitlement-contract-v1.json");
+        let contract: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("contract is readable"))
+                .expect("contract is JSON");
+        assert_eq!(
+            contract["refusal_marker_prefix"].as_str(),
+            Some(ENTITLEMENT_REFUSAL_MARKER),
+            "the marker this hook scans for is fixed by the contract"
+        );
+        let published: Vec<&str> = contract["refusal_identifiers"]
+            .as_array()
+            .expect("refusal_identifiers is an array")
+            .iter()
+            .chain(
+                contract["sdk_only_identifiers"]
+                    .as_array()
+                    .map(|values| values.iter())
+                    .unwrap_or_default(),
+            )
+            .map(|value| value.as_str().expect("identifier is a string"))
+            .collect();
+        for identifier in SELF_HEALING_REFUSALS {
+            assert!(
+                published.contains(&identifier),
+                "{identifier} is classified here but is not in the contract"
+            );
+        }
+        // Every published identifier must be classified deliberately, so a new
+        // one fails this test rather than defaulting into the permanent bucket
+        // without anybody deciding it belongs there.
+        let decided: Vec<&str> = [
+            "E_NO_KEY",
+            "E_KEY_FILE_UNUSABLE",
+            "E_MALFORMED_KEY",
+            "E_UNVERIFIED",
+            "E_UNKNOWN_KEY",
+            "E_REVOKED",
+            "E_KEY_EXPIRED",
+            "E_GRACE_EXPIRED",
+            "E_CLOCK_BACKWARDS",
+            "E_UNKNOWN",
+        ]
+        .to_vec();
+        for identifier in &published {
+            assert!(
+                decided.contains(identifier),
+                "{identifier} is published but this hook has never decided whether it is \
+                 self-healing -- add it to the list above with a reason"
             );
         }
     }
