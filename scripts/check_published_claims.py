@@ -12,6 +12,18 @@ Two questions, both answered against the live registry:
      The pin describes one platform, and which one is not a guess -- the contract
      it was generated with records the target triple.
 
+     Which digest is the claim depends on what the pin carries. A pin synced from
+     an engine release (`scripts/sync_from_release.py`) records
+     `published_executables`: the engine repository's own statement of what it
+     put inside each platform package. That statement was made in a private
+     repository and is repeated here; this is the only place it meets the public
+     registry, and it does so with no token. The pin's `sha256` is a different
+     number on purpose -- the digest of the ungated build the contract was
+     generated from -- so it is printed beside the verdict and never compared to
+     the registry when the published digest is there to compare instead. A pin
+     with no `published_executables` is one no release has been synced into, and
+     for that pin `sha256` remains the only claim there is to check.
+
   2. Does every version this repository pins actually exist? `optionalDependencies`
      in `typescript/package.json` names a platform package version, and a version
      that was never published turns `npm install` into a resolution failure for
@@ -34,15 +46,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# The npm platform package that carries the executable for each Rust target.
-# Kept here rather than derived, because the mapping is a packaging decision
-# rather than a property of the triple.
-PLATFORM_PACKAGE = {
-    "aarch64-apple-darwin": "darwin-arm64",
-    "x86_64-apple-darwin": "darwin-x64",
-    "aarch64-unknown-linux-gnu": "linux-arm64",
-    "x86_64-unknown-linux-gnu": "linux-x64",
-}
+# The npm platform package that carries the executable for each Rust target
+# lives in the sync script, which writes the pin this script reads; importing
+# it is what keeps the writer and the reader from disagreeing about a slug.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sync_from_release import PLATFORM_PACKAGE  # noqa: E402
 
 
 def registry_metadata(package: str) -> dict:
@@ -62,7 +70,7 @@ def sha256_of(path: Path) -> str:
 
 
 def check_pin_describes_published_engine() -> list[str]:
-    """The pinned executable digest, against the engine `latest` resolves to."""
+    """The pin's claim about the shipped executable, against the package on the registry."""
     pin = json.loads((REPO / "reference" / "binary-pin.json").read_text())
     contract = json.loads((REPO / "reference" / "kaleidoscope-public-contract.json").read_text())
     triple = contract["target"]["triple"]
@@ -73,7 +81,15 @@ def check_pin_describes_published_engine() -> list[str]:
 
     name = f"@kleos-research/kaleidoscope-{package}"
     metadata = registry_metadata(name)
-    version = metadata["dist-tags"]["latest"]
+    # A synced pin says which version the release published, so that is the
+    # version whose executable is the claim; `latest` is the fallback for a pin
+    # that predates the sync and makes no statement about versions at all.
+    version = pin.get("release_version") or metadata["dist-tags"]["latest"]
+    if version not in metadata.get("versions", {}):
+        return [
+            f"reference/binary-pin.json says release {version} published {name}, but the "
+            f"registry has no such version"
+        ]
     tarball_url = metadata["versions"][version]["dist"]["tarball"]
 
     with tempfile.TemporaryDirectory() as directory:
@@ -90,11 +106,39 @@ def check_pin_describes_published_engine() -> list[str]:
             with executable.open("wb") as out:
                 shutil.copyfileobj(extracted, out)
             published = sha256_of(executable)
+            published_bytes = executable.stat().st_size
+
+    print(f"  target triple      {triple}")
+    print(f"  published          {name}@{version}  {published}  ({published_bytes} bytes)")
+    print(f"  contract build     {pin['sha256']}")
+
+    claimed = pin.get("published_executables")
+    if claimed is not None:
+        entry = claimed.get(package)
+        if entry is None:
+            return [
+                f"reference/binary-pin.json carries published_executables but no {package} "
+                f"entry, while the contract beside it describes {triple}; the release that "
+                f"generated the contract did not ship the platform it describes"
+            ]
+        print(f"  claimed published  {entry['sha256']}  ({entry['bytes']} bytes)")
+        problems = []
+        if entry["sha256"] != published:
+            problems.append(
+                f"reference/binary-pin.json says the engine release put {entry['sha256']} "
+                f"inside {name}@{version}, but the registry's copy hashes to {published}. "
+                "The private repository's statement and the public package disagree; "
+                "regenerate from the release that was actually published rather than "
+                "editing either side."
+            )
+        if entry["bytes"] != published_bytes:
+            problems.append(
+                f"reference/binary-pin.json says the executable inside {name}@{version} is "
+                f"{entry['bytes']} bytes; the registry's copy is {published_bytes}."
+            )
+        return problems
 
     pinned = pin["sha256"]
-    print(f"  target triple      {triple}")
-    print(f"  published          {name}@{version}  {published}")
-    print(f"  pinned             {pinned}")
     if published == pinned:
         return []
     return [

@@ -1,8 +1,27 @@
 {
-  "source_commit": "d96355632cc52816472106d0776ce63d73631fef",
-  "sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
+  "source_commit": "a26de88dfee9a6d18fe0cfe59cc01fd7c8f77f9c",
+  "sha256": "20492c0c68ce1c06d390ef937fc841bd107a5f3676d2455cb21136d020970662",
   "shared_vault_runtime_sha256": "9eeae09b2f5912c6ee49a8b6a5d7fd523addad9d0424aee6438804f1a86fc594",
-  "isolated_distribution_candidate_sha256": "988192ac9677d5dd55a3642b2da493a0806bb860b5b3c0f509b37ddadee08825",
-  "public_contract_sha256": "a2357ed6c00e3e143d08581590571447e31d24fd0e7d2466d28a211a0515c75e",
-  "mcp_protocol_revision": "2025-11-25"
+  "isolated_distribution_candidate_sha256": "20492c0c68ce1c06d390ef937fc841bd107a5f3676d2455cb21136d020970662",
+  "public_contract_sha256": "23bf8bd4d2e95c81cba721e1f8616458a2a7a016f2e92645f26dd0d036ce627e",
+  "mcp_protocol_revision": "2025-11-25",
+  "release_version": "0.0.5",
+  "published_executables": {
+    "darwin-arm64": {
+      "sha256": "24fc3a87f6007f3f0092172b89c01caf554ff32def4f388680d4d8d55c085d3e",
+      "bytes": 22993280
+    },
+    "darwin-x64": {
+      "sha256": "d2bc528dc01c6ee747da80fd674f5f13a760ae3afc96257918a29e2aae6fa03c",
+      "bytes": 25340056
+    },
+    "linux-arm64": {
+      "sha256": "c24f15514792ccb8b8e9b8217ec37bb173b7eecc102d565990248f957d9c8139",
+      "bytes": 23149400
+    },
+    "linux-x64": {
+      "sha256": "dad7da1aa63b5643c917a428f4e52cf2f8b6180b29b7f82afda88957b51cd76c",
+      "bytes": 26384144
+    }
+  }
 }

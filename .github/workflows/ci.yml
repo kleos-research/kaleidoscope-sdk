@@ -8,9 +8,11 @@ name: CI
 # change weakens it:
 #
 #   contract   the four manifests agree with each other, the licence metadata
-#              says what NOTICE says, and no instruction asset carries an
-#              injection. These are the assertions that stop this repository
-#              contradicting itself.
+#              says what NOTICE says, no instruction asset carries an
+#              injection, and the files derived from an engine release -- the
+#              binary pin, the vendored contract, the platform package pins --
+#              agree with one another. These are the assertions that stop this
+#              repository contradicting itself.
 #   rust       the manager builds, is formatted, and is clippy-clean with
 #              warnings denied. `-D warnings` is the same bar the engine holds.
 #   typescript the client typechecks and its tests pass against the fake MCP
@@ -48,6 +50,17 @@ jobs:
 
       - name: The four manifests agree
         run: python -m pytest python/tests/test_repository_contract.py -v
+
+      # The engine repository is private and this one is public, so the truth
+      # about a release is pushed here: the engine's release job regenerates
+      # reference/binary-pin.json, the vendored contract and the platform
+      # package pins from its release assets and opens a pull request carrying
+      # them. This step is the receiving side. It is OFFLINE -- no token, no
+      # network -- and recomputes every derived value from the committed files,
+      # so a hand edit to any one of them fails here, on the pull request,
+      # rather than in the registry job below once the package is out.
+      - name: The release pin, the vendored contract and the platform pins agree
+        run: python3 scripts/sync_from_release.py --check
 
       - name: Licence metadata matches NOTICE
         run: python -m pytest python/tests/test_licensing.py -v
@@ -137,6 +150,14 @@ jobs:
       # release contract generator against the release candidate, commit the
       # regenerated contract and pin together, and this job goes green. Editing the digest by hand would make the pin agree with
       # the registry while describing evidence nobody produced.
+      #
+      # Once a release has been synced in (scripts/sync_from_release.py
+      # --apply), the pin also carries `published_executables`: the engine
+      # repository's own statement of the digest inside each platform package.
+      # From then on THAT is what this job holds against the registry, and the
+      # contract's executable digest is printed beside it without being
+      # compared -- it describes the ungated build the contract was generated
+      # from, which is a different file from the one npm ships, on purpose.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
