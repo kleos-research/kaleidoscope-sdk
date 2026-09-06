@@ -26,5 +26,17 @@ test("package selection advertises only the natively exercised target", () => {
 });
 
 test("missing optional companion is a typed installation failure", () => {
-  assert.throws(() => installedPayloadPaths(), MissingPlatformPackageError);
+  // Which typed failure arrives depends on the host, and both are the point.
+  // On the one target this package advertises, the companion is genuinely not
+  // installed -- nothing in this repository installs it -- so the locator must
+  // say so by type. On any other host the platform is refused before a
+  // companion is looked for at all.
+  //
+  // Asserting only the first made this test pass on the author's Mac and fail
+  // on CI's Linux: a test that described a machine rather than the code.
+  const expected =
+    process.platform === "darwin" && process.arch === "arm64"
+      ? MissingPlatformPackageError
+      : UnsupportedPlatformError;
+  assert.throws(() => installedPayloadPaths(), expected);
 });
