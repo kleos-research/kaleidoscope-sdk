@@ -383,7 +383,6 @@ fn run_account(invocation: AccountInvocation) -> Result<()> {
             let _ = (all_devices, local_only);
         }
         AccountInvocation::Link { provider } => drop(provider),
-        AccountInvocation::Identities => {}
         AccountInvocation::Unlink {
             external_identity_id,
         } => {
@@ -392,7 +391,14 @@ fn run_account(invocation: AccountInvocation) -> Result<()> {
         AccountInvocation::RevokeDevice { device_id } => {
             let _ = device_id;
         }
-        AccountInvocation::Status
+        // The verbs that carry nothing to consume. They are one arm rather
+        // than several because clippy reads identical bodies as a mistake, and
+        // an arm per verb here would be exactly that: this function exists to
+        // refuse every account verb with ProviderNotConfigured, and the ones
+        // with fields only appear above so that their fields are visibly
+        // dropped rather than silently ignored.
+        AccountInvocation::Identities
+        | AccountInvocation::Status
         | AccountInvocation::RevokeSession
         | AccountInvocation::Devices => {}
     }

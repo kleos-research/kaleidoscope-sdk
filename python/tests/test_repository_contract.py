@@ -79,6 +79,15 @@ def test_registry_facades_share_one_final_name_and_version() -> None:
         "kaleidoscope": "./bin/kaleidoscope.js",
         "kscope": "./bin/kscope.js",
     }
+    # The platform package pin is the one version here that is NOT the client's
+    # own. The engine builds and publishes the platform packages, so they carry
+    # the engine's release version, and that version reaches this file only
+    # through `scripts/sync_from_release.py`, which records it in the binary
+    # pin as `release_version`. A tree no release has been synced into has no
+    # such field, and there the pin still says the client's own version -- the
+    # placeholder it was given before the engine ever pushed a release here.
+    pin = json.loads((ROOT / "reference" / "binary-pin.json").read_text())
+    platform_version = pin.get("release_version", typescript["version"])
     assert typescript["optionalDependencies"] == {
-        "@kleos-research/kaleidoscope-darwin-arm64": "0.1.0-rc.1"
+        "@kleos-research/kaleidoscope-darwin-arm64": platform_version
     }

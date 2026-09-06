@@ -1,0 +1,188 @@
+name: CI
+
+# This repository had no CI at all until this file existed. Everything below
+# already existed as a test somebody could run by hand; the only new thing is
+# that a machine now runs them, on every push, whether or not anyone remembers.
+#
+# What each job protects, stated once so a future reader can tell whether a
+# change weakens it:
+#
+#   contract   the four manifests agree with each other, the licence metadata
+#              says what NOTICE says, no instruction asset carries an
+#              injection, and the files derived from an engine release -- the
+#              binary pin, the vendored contract, the platform package pins --
+#              agree with one another. These are the assertions that stop this
+#              repository contradicting itself.
+#   rust       the manager builds, is formatted, and is clippy-clean with
+#              warnings denied. `-D warnings` is the same bar the engine holds.
+#   typescript the client typechecks and its tests pass against the fake MCP
+#              fixture. `npm ci`, never `npm install`: the lockfile is the pin.
+#   shipped-pin  reference/binary-pin.json describes the engine users can
+#              actually install. SEE THE NOTE ON THAT JOB -- it fails today, on
+#              purpose, and the failure is the finding.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Repository contract, licensing, poison scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The client and its test extra only. The framework extras (crewai,
+      # langchain, openai-agents, claude) are deliberately NOT installed here:
+      # every test that needs one opens with `pytest.importorskip`, so they skip
+      # cleanly, and pinning four agent frameworks into this job would make it
+      # fail for reasons that have nothing to do with this repository.
+      # `mcp` is pinned to the version COMPATIBILITY.md records as verified.
+      #
+      # `python/pyproject.toml` asks for `mcp>=1.28.1,<3`, and that range admits
+      # a 2.x this repository's tests do not support: on 2.1.1 a startup failure
+      # arrives as an `ExceptionGroup` where `test_entitlement.py` asserts
+      # `McpError`, and the version-mismatch guard stops firing. That gap
+      # between what the package claims to accept and what is tested is real and
+      # is not fixed here -- it is either a range to narrow or four tests to
+      # generalise, and both are product decisions. Pinning makes the lane test
+      # what the repository actually claims to have verified, and leaves the gap
+      # visible in this comment rather than as a red job nobody reads.
+      - name: Install the client and its test extra
+        run: python -m pip install -e './python[test]' 'mcp==1.28.1'
+
+      - name: The four manifests agree
+        run: python -m pytest python/tests/test_repository_contract.py -v
+
+      # The engine repository is private and this one is public, so the truth
+      # about a release is pushed here: the engine's release job regenerates
+      # reference/binary-pin.json, the vendored contract and the platform
+      # package pins from its release assets and opens a pull request carrying
+      # them. This step is the receiving side. It is OFFLINE -- no token, no
+      # network -- and recomputes every derived value from the committed files,
+      # so a hand edit to any one of them fails here, on the pull request,
+      # rather than in the registry job below once the package is out.
+      - name: The release pin, the vendored contract and the platform pins agree
+        run: python3 scripts/sync_from_release.py --check
+
+      - name: Licence metadata matches NOTICE
+        run: python -m pytest python/tests/test_licensing.py -v
+
+      # Instruction assets are compiled into the manager binary with
+      # `include_str!`, so anything hidden in them is shipped to a user's agent.
+      - name: No instruction asset carries an injection
+        run: python3 scripts/poison_scan.py
+
+      # The two framework files are excluded, not skipped, and the difference
+      # matters: they do not open with `pytest.importorskip`, so without
+      # `crewai`, `agents` and `langchain_core` installed they ERROR rather than
+      # skip. Installing four agent frameworks here would make this job fail for
+      # reasons that have nothing to do with this code -- the argument this
+      # repository already makes for keeping the extras out of CI. They belong
+      # in a per-framework lane, pinned the way COMPATIBILITY.md pins them,
+      # which does not exist yet.
+      - name: The rest of the Python suite
+        run: |
+          python -m pytest python/tests -v \
+            --ignore=python/tests/test_tool_bindings.py \
+            --ignore=python/tests/test_tools.py
+
+  rust:
+    name: Rust manager
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1.85 is `rust-version` in Cargo.toml. Pinning the toolchain rather than
+      # taking `stable` keeps a compiler release from turning into a red build
+      # nobody caused.
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      # The Linux runner has no macOS keychain and no Windows credential store,
+      # so the default features cannot build here. `--no-default-features` is
+      # what the platform allows, not a lowered bar: the credential-store code
+      # is exercised on the platform that has one.
+      - name: Clippy, warnings denied
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --no-default-features --locked
+
+  typescript:
+    name: TypeScript client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The TypeScript tests speak MCP to a fixture written in Python, so the
+      # bootstrap script builds a throwaway venv holding exactly one pinned
+      # dependency. It installs no engine and writes no account state.
+      - name: Test prerequisites
+        run: sh scripts/bootstrap-typescript-tests.sh
+
+      - name: Typecheck
+        working-directory: typescript
+        run: npm run typecheck
+
+      - name: Tests
+        working-directory: typescript
+        run: npm test
+
+  published-claims:
+    name: What this repository says about published packages is true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # WHY THIS JOB FAILS TODAY, AND WHY THAT IS THE POINT.
+      #
+      # reference/binary-pin.json pins engine commit d9635563 and executable
+      # 988192ac..., and python/tests/test_cross_language_golden.py plus
+      # typescript/test/cross-language-golden.test.ts assert the contract digest
+      # that was generated from it. None of those describe the engine on npm:
+      # @kleos-research/kaleidoscope@0.0.5 ships 24fc3a87... So the conformance
+      # suite has been green against a build no user can obtain.
+      #
+      # The tests could not see it because they compare the pin to a file
+      # committed beside it -- the repository agreeing with itself. This job is
+      # the first thing here that asks the registry.
+      #
+      # To fix it, do NOT hand-edit the pin: regenerate it. Run the engine's
+      # release contract generator against the release candidate, commit the
+      # regenerated contract and pin together, and this job goes green. Editing the digest by hand would make the pin agree with
+      # the registry while describing evidence nobody produced.
+      #
+      # Once a release has been synced in (scripts/sync_from_release.py
+      # --apply), the pin also carries `published_executables`: the engine
+      # repository's own statement of the digest inside each platform package.
+      # From then on THAT is what this job holds against the registry, and the
+      # contract's executable digest is printed beside it without being
+      # compared -- it describes the ungated build the contract was generated
+      # from, which is a different file from the one npm ships, on purpose.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ask the registry whether our claims are true
+        run: python3 scripts/check_published_claims.py
