@@ -156,6 +156,20 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(3);
 const WHERE_TIMEOUT: Duration = Duration::from_millis(1_200);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(2_500);
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The trailing arguments tried, in order, for one `search`.
+///
+/// `--json` first: from kscope 0.0.6 the CLI answers the agent verbs with a
+/// compact text rendering by default -- fewer tokens for the agent that reads
+/// it -- and `--json` asks for the object this hook decodes. Bare second: an
+/// engine that predates the flag (0.0.5 and earlier) rejects an argument it
+/// does not know and exits non-zero, and its default output was already that
+/// object. Trying both is what lets one manager serve both engine generations.
+///
+/// The second attempt is not a second search. The request body is the replay
+/// key, and it is identical, so an engine that ran the first form replays the
+/// same exposure row for the second rather than writing another one.
+const SEARCH_FORMS: [&[&str]; 2] = [&["--json"], &[]];
 /// How long to wait for the harness's own hook input on stdin before giving up
 /// and falling back to the working directory. Short on purpose: run by hand
 /// from a terminal, stdin is a tty and nothing is ever coming.
@@ -1130,12 +1144,6 @@ fn retrieve_memories(
     let started = Instant::now();
     let mut last_error = None;
     for scope_requested in [true, false] {
-        let Some(timeout) = deadline.slice(SEARCH_TIMEOUT) else {
-            return last_error.map_or(
-                Memories::Skipped("the hook's time budget was spent before retrieval"),
-                Memories::Unavailable,
-            );
-        };
         let mut request = json!({
             "query": label,
             "top_k": MEMORY_TOP_K,
@@ -1145,25 +1153,44 @@ fn retrieve_memories(
             request["scope"] = json!({ "project": label });
         }
         let payload = request.to_string();
-        let output = match engine.run_bounded_in(
-            Some(cwd),
-            &["call", "--profile", profile, "search"],
-            Some(payload.as_bytes()),
-            timeout,
-        ) {
-            Ok(output) => output,
-            Err(failure) => return Memories::Unavailable(failure.to_string()),
-        };
-        if !output.success {
-            last_error = Some(if output.stderr.is_empty() {
-                "the engine refused the search".to_owned()
-            } else {
-                output.stderr.clone()
-            });
-            continue;
+        let mut value = None;
+        for form in SEARCH_FORMS {
+            let Some(timeout) = deadline.slice(SEARCH_TIMEOUT) else {
+                return last_error.map_or(
+                    Memories::Skipped("the hook's time budget was spent before retrieval"),
+                    Memories::Unavailable,
+                );
+            };
+            let mut arguments = vec!["call", "--profile", profile, "search"];
+            arguments.extend_from_slice(form);
+            let output = match engine.run_bounded_in(
+                Some(cwd),
+                &arguments,
+                Some(payload.as_bytes()),
+                timeout,
+            ) {
+                Ok(output) => output,
+                Err(failure) => return Memories::Unavailable(failure.to_string()),
+            };
+            if !output.success {
+                last_error = Some(if output.stderr.is_empty() {
+                    "the engine refused the search".to_owned()
+                } else {
+                    output.stderr.clone()
+                });
+                continue;
+            }
+            match serde_json::from_slice::<Value>(&output.stdout) {
+                Ok(parsed) => {
+                    value = Some(parsed);
+                    break;
+                }
+                Err(_) => {
+                    last_error = Some("the engine's search result did not parse".to_owned());
+                }
+            }
         }
-        let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else {
-            last_error = Some("the engine's search result did not parse".to_owned());
+        let Some(value) = value else {
             continue;
         };
         let (entries, labelled) = render_hits(&value, label);
@@ -2473,5 +2500,88 @@ mod adoption_tests {
                 .unwrap()
                 .exists()
         );
+    }
+
+    /// A shell script standing in for `kscope`, so the hook's argument vector
+    /// and its handling of each answer are tested through the door the real
+    /// engine is called through. Every script drains stdin first: the hook
+    /// writes the request there, and a child that exits without reading it
+    /// turns the write into a spawn failure rather than the answer under test.
+    fn fake_engine(temp: &TempDir, body: &str) -> Engine {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = temp.path().join("kscope");
+        fs::write(&path, format!("#!/bin/sh\ncat >/dev/null\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        Engine::new(&path).unwrap()
+    }
+
+    // `r##`: the heading's `"#` would close an `r#` literal.
+    const ONE_HIT: &str = r##"{"selected_hits":[{"memory_id":"mem_1","memory_type":"decision","content_md":"# Ship it\n\nThe body.","scope":{"project":"proj"}}]}"##;
+
+    fn memories_from(engine: &Engine) -> Memories {
+        retrieve_memories(
+            engine,
+            "default",
+            Some("proj"),
+            &std::env::temp_dir(),
+            &Deadline::new(Duration::from_secs(5)),
+        )
+    }
+
+    #[test]
+    fn a_current_engine_is_asked_for_json_and_its_compact_default_is_never_parsed() {
+        // kscope >= 0.0.6: compact text by default, the object on `--json`.
+        // The hook must find the object, and must not report the text as
+        // "did not parse" -- that was the 2026-09-11 session-start regression.
+        let temp = TempDir::new().unwrap();
+        let engine = fake_engine(
+            &temp,
+            &format!(
+                "for a in \"$@\"; do [ \"$a\" = --json ] && {{ printf '%s' '{ONE_HIT}'; exit 0; }}; done\n\
+                 printf 'Kaleidoscope memory context\\n\\nkscope:tag | Memory 1 | ...\\n'"
+            ),
+        );
+        match memories_from(&engine) {
+            Memories::Found {
+                entries, labelled, ..
+            } => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(labelled, 1);
+                assert!(entries[0].contains("(mem_1)"), "{entries:?}");
+            }
+            Memories::Unavailable(reason) => panic!("unavailable: {reason}"),
+            Memories::Skipped(reason) => panic!("skipped: {reason}"),
+            Memories::Empty => panic!("empty"),
+        }
+    }
+
+    #[test]
+    fn an_engine_that_predates_json_is_retried_bare() {
+        // kscope <= 0.0.5: an unknown trailing argument is a usage error, and
+        // the bare call already answered with the object.
+        let temp = TempDir::new().unwrap();
+        let engine = fake_engine(
+            &temp,
+            &format!(
+                "for a in \"$@\"; do [ \"$a\" = --json ] && {{ echo 'usage: kscope call' >&2; exit 2; }}; done\n\
+                 printf '%s' '{ONE_HIT}'"
+            ),
+        );
+        assert!(
+            matches!(memories_from(&engine), Memories::Found { .. }),
+            "the usage error from the first form must not be the verdict"
+        );
+    }
+
+    #[test]
+    fn an_engine_that_answers_neither_form_with_json_is_reported_as_unparsed() {
+        let temp = TempDir::new().unwrap();
+        let engine = fake_engine(&temp, "printf 'not json'");
+        match memories_from(&engine) {
+            Memories::Unavailable(reason) => {
+                assert_eq!(reason, "the engine's search result did not parse");
+            }
+            _ => panic!("two unparsable answers must surface as unavailable"),
+        }
     }
 }
