@@ -192,6 +192,112 @@ OpenCode v2 is explicitly beta. An existing `mcp.servers` object selects the bet
 
 A valid existing stable or beta Kaleidoscope entry is adopted in place with an owner receipt. The manager never auto-migrates stable v1 to beta v2. Divergent entries, conflicting requested versions, and ambiguous dual shapes are refused for manual review.
 
+## Harnesses the manager does not wire yet
+
+`connect` supports four hosts. Four more are documented here with the exact
+paths and shapes so you can wire them **by hand today**, and the config formats
+below were read off each vendor's own source or documentation rather than
+inferred.
+
+This is worth doing rather than waiting, because of the adoption rule above: an
+entry that is byte-identical to what the manager writes is **adopted, not
+refused**. Wire it by hand now and a later `connect` writes the receipt beside
+your file and changes no bytes.
+
+In every snippet, `command` is the absolute path to the engine — `kscope where`
+prints it — and the arguments are always `["mcp", "--profile", "default"]`.
+
+### Gemini CLI
+
+`~/.gemini/settings.json`, or `<project>/.gemini/settings.json`. The file is
+JSONC-tolerant, and `mcpServers` is a top-level key merged shallowly, so add the
+one key and leave the rest of the file alone.
+
+```json
+{ "mcpServers": { "kaleidoscope": {
+  "command": "/abs/path/kscope", "args": ["mcp", "--profile", "default"] } } }
+```
+
+**No `type` field** — Gemini's `MCPServerConfig.type` is `sse` or `http` only,
+and stdio is inferred from the presence of `command`. Copy the Cursor entry
+shape, not the Claude Code one.
+
+Instructions go in `GEMINI.md` — **but check your merged `context.fileName`
+first.** If it is set and does not include `GEMINI.md`, writing that file is a
+silent no-op.
+
+### Zed
+
+macOS `~/.config/zed/settings.json`, or `<project>/.zed/settings.json`. Note
+that on macOS Zed does *not* consult `XDG_CONFIG_HOME` for this.
+
+```json
+{ "context_servers": { "kaleidoscope": {
+  "command": "/abs/path/kscope", "args": ["mcp", "--profile", "default"] } } }
+```
+
+**The key is `context_servers`, not `mcpServers`**, `command` is a plain string,
+and there is no `type` or `source` field — the struct is `#[serde(untagged)]`.
+Settings across worktrees merge first-wins.
+
+Instructions use a **first-match list**: `.rules`, `.cursorrules`,
+`.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md`, `AGENT.md`,
+`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`. Resolve which one wins in your project
+before writing; adding `AGENTS.md` when `.rules` already exists does nothing.
+Skills live at `~/.agents/skills/<name>/SKILL.md`.
+
+### Windsurf
+
+**Two agents, two files.** Legacy Cascade reads
+`~/.codeium/windsurf/mcp_config.json` — user scope only, no project scope. Devin
+Local, the default agent in new tabs, reads `~/.config/devin/mcp_config.json`
+with `<project>/.devin/mcp_config.json` for project scope. Wire whichever you
+use; wire both if you switch between them.
+
+```json
+{ "mcpServers": { "kaleidoscope": {
+  "command": "/abs/path/kscope", "args": ["mcp", "--profile", "default"] } } }
+```
+
+`mkdir -p` the directory first — Windsurf does not create the file on first
+launch. Never rewrite the file wholesale: the Marketplace UI writes sibling keys
+into it. Instructions go in `AGENTS.md` at the repository root, which both
+agents read. Skills: `.windsurf/skills/<name>/SKILL.md`, or
+`~/.codeium/windsurf/skills/` globally.
+
+### Hermes
+
+`config.yaml` under the Hermes home, which is **not reliably `~/.hermes`**.
+Resolution is `$HERMES_HOME`, else the native default (`~/.hermes`, or
+`%LOCALAPPDATA%\hermes` on Windows) — and if a profile is active, the file moves
+to `<home>/profiles/<name>/config.yaml`. Check `<home>/.hermes/active_profile`
+before writing: **the native default while a profile is active is a file Hermes
+never reads.** There is no project scope.
+
+```yaml
+mcp_servers:
+  kaleidoscope:
+    command: /abs/path/kscope
+    args: ["mcp", "--profile", "default"]
+```
+
+The file is YAML that may carry your comments and Hermes round-trips it on
+save — back it up, and edit the one key rather than reformatting. Optional keys
+are `enabled`, `connect_timeout`, `timeout` and `tools: {include, exclude}`.
+Transport is selected by `url` versus `command`, so there is no `type`.
+
+Instructions use a first-match list too: `.hermes.md` / `HERMES.md`, then
+`AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, `.cursorrules`. Files from the
+git root down to the working directory are merged, capped at 8,000 characters
+each and security-scanned. Skills: `~/.hermes/skills/<name>/SKILL.md`.
+
+### Verifying any of them
+
+**"The file was written" is not verification** — a wrong path fails silently and
+looks identical to success. The check is that the harness itself lists the
+tools: run its own MCP listing (`/mcp` in most of them) and confirm `search`
+and `remember` appear.
+
 ## Install agent instructions
 
 The canonical skill is [skills/use-kaleidoscope/SKILL.md](skills/use-kaleidoscope/SKILL.md). `init --host` installs it for you; the commands below are the manual equivalents. `skill` takes `--host` because the directory differs per harness, and the installed file is byte-identical to the shipped one -- it carries no injected marker.
