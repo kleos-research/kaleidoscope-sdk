@@ -1,92 +1,86 @@
 # Kaleidoscope for TypeScript
 
-`@kleos-research/kaleidoscope` is the public TypeScript client and command
-package for Kaleidoscope. The package contains the typed process/MCP helpers
-and two small command launchers; its platform companion contains the public
-manager and proprietary `kscope` engine as object code.
+A TypeScript client for [Kaleidoscope](https://memory.kleosresearch.xyz), local memory for AI
+agents. It starts the `kscope` engine, keeps one MCP session open, and calls the two memory
+tools, `search` and `remember`, from Node.js.
 
-The first release candidate supports only the natively exercised macOS arm64
-coordinate. Installation remains protected and unpublished until the legal,
-signing, registry, and promotion gates are approved.
+**It is not on npm yet.** The npm package named `@kleos-research/kaleidoscope` installs the
+Kaleidoscope engine, not this client. To use this client, build it from the repository.
 
-```sh
-npm install @kleos-research/kaleidoscope
-kaleidoscope --version
-kscope --version
+## Build it
+
+You need Node.js 22 or newer, and the engine installed and activated. The
+[quickstart](https://github.com/kleos-research/kaleidoscope-sdk#quickstart) covers the engine,
+including how to get an API key.
+
+```bash
+git clone https://github.com/kleos-research/kaleidoscope-sdk.git
+cd kaleidoscope-sdk/typescript
+npm ci
+npm run build
 ```
 
-```ts
-import {
-  installedPayloadPaths,
-  loadLaunchDescriptor,
-  mcpStdioConfig,
-} from "@kleos-research/kaleidoscope";
+## Use it
 
-const { engine } = installedPayloadPaths();
+Give the client the path to the engine. `kscope init` keeps a copy of the engine at
+`~/.kaleidoscope/bin/kscope`, and creates the `default` profile used here:
+
+```js
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { loadLaunchDescriptor, PersistentKaleidoscopeSession } from "./dist/src/index.js";
+
+const engine = join(homedir(), ".kaleidoscope", "bin", "kscope");
 const descriptor = loadLaunchDescriptor(engine, "default");
-const mcp = mcpStdioConfig(descriptor);
+
+const memory = await new PersistentKaleidoscopeSession(descriptor).connect();
+try {
+  console.log(await memory.searchText({ query: "What did we decide about retries?" }));
+} finally {
+  await memory.close();
+}
 ```
 
-Explicit executable paths and SHA-256 pins remain available for controllers.
-The wrapper implements no memory algorithm or secondary store, and models see
-only the native MCP tools `search` and `remember`.
+Save it as a `.mjs` file in this folder and run it with `node`. A session keeps one engine
+process for its whole life, so open one per run, not one per call.
 
-## The alpha entitlement and the child environment
+Pass the path explicitly. Without one, the client looks for a platform package that the
+published npm packages do not provide.
 
-An alpha `kscope` refuses `mcp`, `context`, `call` and `serve` without a valid
-entitlement, so the key has to reach the engine this package spawns.
+More examples: [`examples/genericMcp.ts`](examples/genericMcp.ts), a plain MCP session, and
+[`examples/openaiAgents.ts`](examples/openaiAgents.ts), the OpenAI Agents SDK.
 
-The child environment is built from a closed, **by-name** allowlist in
-`src/descriptor.ts`: eighteen conventional process/bootstrap variables, plus
-exactly two entitlement variables — `KALEIDOSCOPE_API_KEY` and
-`KSCOPE_ENTITLEMENT_HOME`. The first is a credential and is passed
-deliberately; the second is where the engine looks for the key file.
+## Your API key
 
-Everything else in your environment is not copied, because it is not named:
-other providers' API keys, a Supabase service-role key, anything in a `.env`.
-There is no prefix rule and no pattern — `KSCOPE_ENTITLEMENT_PROBE`, which names
-an executable the engine would spawn and hand the key to, is deliberately not
-admitted. Widening the list is an edit to two literal arrays and to
-`reference/entitlement-contract-v1.json`.
+The engine reads your key from `KALEIDOSCOPE_API_KEY` or from the key file that
+`kscope activate` wrote. To pass it in code, use
+`new PersistentKaleidoscopeSession(descriptor, { apiKey })`.
 
-If you would rather export nothing, write the key to the file `kscope gate`
-names under `key_file`, mode `0600`. The SDK checks only that a key is
-**present** — never whether it is good. Validity is decided by the engine and
-the control plane; this package is Apache-2.0 and trivially editable, so a check
-here would be theatre and a second source of truth.
+The client starts the engine with only a fixed list of environment variables, so other secrets
+in your environment are not passed on. If the engine refuses for a key reason, you get an
+`EntitlementError` with a readable `message`, the engine's own output in `diagnostic` (shortened,
+with keys masked), and the refusal code, such as `E_NO_KEY`, in `reason`. See
+[API keys and the engine's environment](https://github.com/kleos-research/kaleidoscope-sdk/blob/main/docs/api-keys-and-environment.md).
 
-A refusal arrives as a typed `EntitlementError` carrying this SDK's own
-actionable `message`, the engine's bounded and redacted stderr in `diagnostic`,
-and the identifier in `reason`. Child stderr is still never streamed anywhere.
+## Run the tests
 
-## Local test bootstrap
-
-The TypeScript MCP fixture is a test-only Python stdio server, so a clean
-checkout needs its ignored Python virtual environment before running `npm test`:
-
-```sh
-cd typescript
+```bash
 npm run test:bootstrap
 npm test
 ```
 
-The bootstrap creates `python/.venv`, installs only `mcp==1.29.0`, and runs
-`npm ci`. It does not install a Kaleidoscope engine, create a vault, or contact
-the account service.
+The tests talk to a small fake MCP server written in Python. `test:bootstrap` creates a Python
+virtual environment at `../python/.venv` with one pinned dependency (`mcp==1.29.0`) and runs
+`npm ci`. It installs no engine, creates no vault, and contacts no account service.
 
 ## Licence
 
-Apache-2.0. See LICENSE for the terms and NOTICE for the copyright line that
-Section 4(d) requires downstream redistributors to carry forward.
+Apache-2.0. See LICENSE for the terms and NOTICE for the copyright line, which Section 4(d) of
+the licence requires anyone redistributing this package to carry forward.
 
-That licence covers this package's own source. It does not cover the `kscope`
-memory engine or any other proprietary object-code payload delivered inside a
-platform package; those are closed source, are not part of this repository, and
-are not licensed by this repository at all — separate terms apply to them.
-The engine carries the third-party attribution it has inside the executable, and
-states in that same output which attribution is not embedded yet:
-
-    kscope licences
-
-Third-party attribution for this repository's own dependencies is in
-THIRD_PARTY_NOTICES.md at the repository root.
+The licence covers this package's own source. It does not cover the `kscope` memory engine or
+any other proprietary object code delivered inside a platform package. Those are closed source,
+are not part of this repository, and are not licensed by it at all: separate terms apply to
+them. `kscope licences` prints the engine's own third-party notices, including which ones are
+not embedded yet. Notices for this repository's dependencies are in `THIRD_PARTY_NOTICES.md` at
+the repository root.

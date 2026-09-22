@@ -1,3 +1,5 @@
+Before changing this repository, read [AGENTS.md](AGENTS.md): it lists the rules a change here most often breaks.
+
 <!-- >>> kaleidoscope-manager owner=kaleidoscope-manager-v1 instruction=claude -->
 ## Kaleidoscope memory
 
