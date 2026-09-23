@@ -298,6 +298,9 @@ class _NativeCaller:
                     "--profile",
                     self._descriptor.profile,
                     operation,
+                    # Without it, `call search` and `call remember` print a
+                    # text receipt rather than the response object parsed below.
+                    "--json",
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,

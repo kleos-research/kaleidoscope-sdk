@@ -296,7 +296,7 @@ def operation_schema() -> None:
     print(f"fixture schema {operation}")
 
 
-def native_call() -> None:
+def native_call(operation: str, json_receipt: bool) -> None:
     raw = sys.stdin.buffer.read()
     try:
         payload = json.loads(raw)
@@ -337,11 +337,16 @@ def native_call() -> None:
     if mode == "gate_check":
         gate_check()
 
+    if operation in ("search", "remember") and not json_receipt:
+        # The engine prints a text receipt for an applied search or remember and
+        # the response object only when `--json` is on the line.
+        print("Kaleidoscope fixture receipt: not JSON without --json")
+        return
     print(
         json.dumps(
             {
                 "status": "accepted",
-                "operation": sys.argv[4],
+                "operation": operation,
                 "invocation": invocation,
                 "payload_sha256": hashlib.sha256(raw).hexdigest(),
                 "payload": payload,
@@ -493,12 +498,14 @@ def run_mcp() -> None:
 
 
 if __name__ == "__main__":
+    # Like the engine, a `call` takes `--json` anywhere on its line.
+    CALL_ARGV = [argument for argument in sys.argv if argument != "--json"]
     if len(sys.argv) == 4 and sys.argv[1:3] == ["profile", "launch"]:
         profile_launch()
     elif len(sys.argv) == 4 and sys.argv[1:3] == ["profile", "show"]:
         profile_show()
-    elif len(sys.argv) == 5 and sys.argv[1:3] == ["call", "--profile"]:
-        native_call()
+    elif sys.argv[1:3] == ["call", "--profile"] and len(CALL_ARGV) == 5:
+        native_call(CALL_ARGV[4], json_receipt=len(CALL_ARGV) < len(sys.argv))
     elif len(sys.argv) == 2 and sys.argv[1] == "gate":
         gate_report()
     elif len(sys.argv) in (2, 3) and sys.argv[1] == "schema":

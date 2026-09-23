@@ -325,7 +325,9 @@ class NativeCaller {
       try {
         const result = await runAttempt(
           this.descriptor.command,
-          ["call", "--profile", this.descriptor.args[2], operation],
+          // Without `--json`, `call search` and `call remember` print a text
+          // receipt rather than the response object parsed below.
+          ["call", "--profile", this.descriptor.args[2], operation, "--json"],
           payload,
           {
             timeoutMs: remaining / attemptsLeft,
