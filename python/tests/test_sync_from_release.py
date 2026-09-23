@@ -41,7 +41,12 @@ SYNCED = (
     "typescript/package-lock.json",
 )
 
-FIXTURE_VERSION = "0.0.5"
+#: The fixture release carries the committed release's version. The tests below
+#: cannot refresh the lockfile (that needs the registry), so the committed
+#: lockfile's resolution of the platform package survives an apply, and a
+#: fixture at any other version disagrees with it. This was spelled "0.0.5",
+#: which only held while the committed release was 0.0.5.
+FIXTURE_VERSION = json.loads((ROOT / "reference" / "binary-pin.json").read_text())["release_version"]
 #: The digest a fixture release claims for the darwin-arm64 executable. Any
 #: 64-hex value would do; this one is distinct from the contract's executable
 #: digest so a test can tell the two apart.
@@ -102,6 +107,13 @@ def _build_release(directory: Path, *, contract_bytes: bytes | None = None) -> P
         # which release, if any, has been synced into the tree.
         document = json.loads((ROOT / "reference" / "kaleidoscope-public-contract.json").read_text())
         document["product"]["version"] = FIXTURE_VERSION
+        # And with the fixture's platform. The fixture publishes a darwin-arm64
+        # executable only, and the sync requires the platform a contract
+        # describes to be among the published executables. The committed
+        # contract describes whichever build the real release's contract was
+        # generated from -- darwin-arm64 at 0.0.5, linux-x64 at 0.0.7 -- so
+        # leaving it untouched ties these tests to one release's build host.
+        document["target"] = {"triple": "aarch64-apple-darwin"}
         contract_bytes = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
     contract.write_bytes(contract_bytes)
     (directory / "kaleidoscope-public-contract.provenance.json").write_text(
