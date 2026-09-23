@@ -146,11 +146,29 @@ impl LaunchDescriptor {
     }
 }
 
+/// `kscope profile list`: the names, each name's entry, and how many entries
+/// are stale.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileList {
     pub version: u32,
     pub profiles: Vec<String>,
+    pub entries: Vec<ProfileEntry>,
+    pub stale: usize,
+}
+
+/// One registered name. A stale entry is one whose vault the engine could no
+/// longer open: it carries the engine's reason instead of a profile, so one
+/// broken entry does not hide the others.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileEntry {
+    pub name: String,
+    pub valid: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Profile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl ProfileList {
@@ -166,6 +184,27 @@ impl ProfileList {
                 contract: "profile list",
                 reason: "invalid version, name, or order",
             });
+        }
+        let names = self.entries.iter().map(|entry| &entry.name);
+        if !names.eq(self.profiles.iter())
+            || self.entries.iter().filter(|entry| !entry.valid).count() != self.stale
+        {
+            return Err(ManagerError::InvalidEngineContract {
+                contract: "profile list",
+                reason: "entries disagree with the names or the stale count",
+            });
+        }
+        for entry in &self.entries {
+            match (entry.valid, &entry.profile, &entry.detail) {
+                (true, Some(profile), None) => profile.validate(Some(&entry.name))?,
+                (false, None, Some(_)) => {}
+                _ => {
+                    return Err(ManagerError::InvalidEngineContract {
+                        contract: "profile list",
+                        reason: "an entry's validity disagrees with its profile",
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -202,4 +241,40 @@ pub fn validate_profile_name(name: &str) -> Result<()> {
         return Err(ManagerError::InvalidProfileName);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProfileList;
+
+    fn listing(stale: usize) -> ProfileList {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "profiles": ["gone", "kept"],
+            "entries": [
+                {"name": "gone", "valid": false, "detail": "the vault is missing"},
+                {"name": "kept", "valid": true, "profile": {
+                    "version": 1,
+                    "name": "kept",
+                    "root": "/vaults/kept",
+                    "workspace_id": "wsp_fixture",
+                    "principal_id": "usr_fixture",
+                    "journal": "journal:fixture",
+                    "durability": "process-local"
+                }}
+            ],
+            "stale": stale
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_listing_with_a_stale_entry_is_accepted() {
+        listing(1).validate().unwrap();
+    }
+
+    #[test]
+    fn a_stale_count_the_entries_do_not_add_up_to_is_refused() {
+        assert!(listing(0).validate().is_err());
+    }
 }
