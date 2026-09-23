@@ -34,6 +34,8 @@ const keyFile = join(entitlementHome, "api-key");
 const invocationLog = join(home, "invocations.log");
 
 const argv = process.argv.slice(2);
+// Like the engine, a `call` takes `--json` anywhere on its line.
+const callArgv = argv.filter((argument) => argument !== "--json");
 
 function record(what) {
   appendFileSync(invocationLog, `${what}\n`, "utf8");
@@ -135,7 +137,7 @@ function dispatchGatedProfile(profile, kind) {
   if (profile === "plainfail") plainFailure();
 }
 
-function nativeCall(profile, operation) {
+function nativeCall(profile, operation, jsonReceipt) {
   const raw = readFileSync(0);
   let payload = {};
   try {
@@ -153,6 +155,12 @@ function nativeCall(profile, operation) {
   dispatchGatedProfile(profile, "call");
   if (profile === "crashonce" && invocation === 1) process.exit(19);
 
+  if ((operation === "search" || operation === "remember") && !jsonReceipt) {
+    // The engine prints a text receipt for an applied search or remember and
+    // the response object only when `--json` is on the line.
+    process.stdout.write("Kaleidoscope fixture receipt: not JSON without --json\n");
+    return;
+  }
   const apiKey = process.env.KALEIDOSCOPE_API_KEY;
   process.stdout.write(
     `${JSON.stringify({
@@ -193,8 +201,8 @@ if (argv.length === 1 && argv[0] === "gate") {
   profileShow(argv[2]);
 } else if ((argv.length === 1 || argv.length === 2) && argv[0] === "schema") {
   process.stdout.write(`fixture schema ${argv[1] ?? "all"}\n`);
-} else if (argv.length === 4 && argv[0] === "call" && argv[1] === "--profile") {
-  nativeCall(argv[2], argv[3]);
+} else if (callArgv.length === 4 && callArgv[0] === "call" && callArgv[1] === "--profile") {
+  nativeCall(callArgv[2], callArgv[3], callArgv.length < argv.length);
 } else if (argv.length === 3 && argv[0] === "mcp" && argv[1] === "--profile") {
   mcp(argv[2]);
 } else {
