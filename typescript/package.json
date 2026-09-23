@@ -38,7 +38,7 @@
     "@openai/agents": "0.17.0"
   },
   "optionalDependencies": {
-    "@kleos-research/kaleidoscope-darwin-arm64": "0.0.5"
+    "@kleos-research/kaleidoscope-darwin-arm64": "0.0.7"
   },
   "devDependencies": {
     "@types/node": "26.2.0",
