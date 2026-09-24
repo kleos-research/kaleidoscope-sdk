@@ -984,7 +984,7 @@ def test_the_published_operation_and_channel_names_are_not_forbidden(
 def test_the_entitlement_variable_names_are_not_forbidden(tmp_path: Path) -> None:
     """Naming a variable is not disclosing where it is read.
 
-    All five are in `reference/entitlement-contract-v1.json`, which is a public
+    All five are in `reference/entitlement-contract-v2.json`, which is a public
     contract both SDKs are asserted against. Forbidding them would make the
     allowlist undocumentable -- and the allowlist's whole defence is that a
     reader can see exactly which names are on it.

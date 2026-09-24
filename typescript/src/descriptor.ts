@@ -70,7 +70,7 @@ export const BOOTSTRAP_ENVIRONMENT_KEYS = [
  *
  * The admission test is not "is it a Kaleidoscope variable" and not "does it look
  * harmless". It is: the published entitlement contract
- * (reference/entitlement-contract-v1.json) says the engine reads this one, AND a
+ * (reference/entitlement-contract-v2.json) says the engine reads this one, AND a
  * supported SDK flow fails without it. Two names pass that test:
  *
  *   KALEIDOSCOPE_API_KEY -- the alpha credential the entitlement gate
@@ -109,7 +109,7 @@ export const BOOTSTRAP_ENVIRONMENT_KEYS = [
  *
  * Widening this list is a deliberate, reviewed edit in three places at once --
  * this list, its twin in the other language, and
- * reference/entitlement-contract-v1.json -- never a prefix and never a pattern.
+ * reference/entitlement-contract-v2.json -- never a prefix and never a pattern.
  */
 export const ENTITLEMENT_ENVIRONMENT_KEYS = [
   "KALEIDOSCOPE_API_KEY",
@@ -154,7 +154,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Supabase service-role key that bypasses row-level security, anything in a
  * .env file -- is not copied, because it is not named. Widening this list is a
  * deliberate, reviewed edit to two literal arrays and to
- * reference/entitlement-contract-v1.json, never a prefix or a pattern.
+ * reference/entitlement-contract-v2.json, never a prefix or a pattern.
  *
  * `apiKey` is the programmatic route. **The allowlist does not grow to carry
  * it**: the value is placed in KALEIDOSCOPE_API_KEY, a name already admitted,
@@ -193,7 +193,7 @@ export function safeBootstrapEnvironment(
  * removed, so it can only ever be a subset. Used by the ungated spawn sites
  * (`profile launch`, `profile show`, `schema`, `gate`) and by the manager, none
  * of which reads KALEIDOSCOPE_API_KEY: the engine's gated command list is
- * ["mcp","context","call","serve"], and the gate report reads no key.
+ * ["mcp","call"], and the gate report reads no key.
  *
  * Narrowing is the only direction this can move, and it is done by removing a
  * name from the ONE list above -- never by adding to a second one.
@@ -246,7 +246,7 @@ export function validatedApiKey(value: string | undefined): string | undefined {
  * read by one language only.
  *
  * So the set is written out: the UNION of both languages' notions, pinned in
- * reference/entitlement-contract-v1.json and asserted from both sides. The
+ * reference/entitlement-contract-v2.json and asserted from both sides. The
  * union rather than the intersection, because a diagnostic is display text and
  * stripping one separator too many is harmless, whereas the two built-ins
  * disagreeing is exactly the defect being closed.

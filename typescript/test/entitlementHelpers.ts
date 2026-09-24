@@ -30,7 +30,7 @@ export interface Golden {
 }
 
 export const GOLDEN: Golden = JSON.parse(
-  readFileSync(resolve(reference, "entitlement-contract-v1.json"), "utf8"),
+  readFileSync(resolve(reference, "entitlement-contract-v2.json"), "utf8"),
 ) as Golden;
 
 /** An obvious non-secret, matching the engine suite's KEY_A. */

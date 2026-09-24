@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "conformance" / "gate_report_keys.py"
-CONTRACT = ROOT / "reference" / "entitlement-contract-v1.json"
+CONTRACT = ROOT / "reference" / "entitlement-contract-v2.json"
 RECORDED = json.loads(CONTRACT.read_text(encoding="utf-8"))
 
 

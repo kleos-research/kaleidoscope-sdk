@@ -73,7 +73,7 @@ KEY_FILE_NAME = "api-key"
 MAX_KEY_FILE_BYTES = 256
 GATE_MARKER_PRESENT = "kaleidoscope.alpha-entitlement-gate.v1:present"
 GATE_MARKER_ABSENT = "kaleidoscope.alpha-entitlement-gate.v1:absent"
-GATED_COMMANDS = ["mcp", "context", "call", "serve"]
+GATED_COMMANDS = ["mcp", "call"]
 REFUSAL_MARKER_PREFIX = "kscope-entitlement-refusal: "
 #: Optional control file inside the entitlement directory.
 #:

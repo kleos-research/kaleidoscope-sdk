@@ -43,7 +43,7 @@ const ENGINE_ENV_ALLOWLIST: &[&str] = &[
     // manager-spawned engine and an SDK-spawned engine disagree about where the
     // key lives and whether there is one.
     // `engine_env_allowlist_contains_the_shared_entitlement_subset` asserts that
-    // against reference/entitlement-contract-v1.json.
+    // against reference/entitlement-contract-v2.json.
     //
     // Benign until it is not: the manager runs only ungated commands today
     // (--version, profile list|show|remove|launch, init-profile, profile
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn engine_env_allowlist_contains_the_shared_entitlement_subset() {
         let contract: Value =
-            serde_json::from_str(include_str!("../reference/entitlement-contract-v1.json"))
+            serde_json::from_str(include_str!("../reference/entitlement-contract-v2.json"))
                 .expect("the shared entitlement contract must parse");
         let required = contract["entitlement_environment"]
             .as_array()

@@ -58,7 +58,7 @@ _BOOTSTRAP_ENV_KEYS = (
 #:
 #: The admission test is not "is it a Kaleidoscope variable" and not "does it look
 #: harmless". It is: the published entitlement contract
-#: (reference/entitlement-contract-v1.json) says the engine reads this one, AND a
+#: (reference/entitlement-contract-v2.json) says the engine reads this one, AND a
 #: supported SDK flow fails without it. Two names pass that test:
 #:
 #:   KALEIDOSCOPE_API_KEY -- the alpha credential the entitlement gate
@@ -97,14 +97,14 @@ _BOOTSTRAP_ENV_KEYS = (
 #:
 #: Widening this list is a deliberate, reviewed edit in three places at once --
 #: this list, its twin in the other language, and
-#: reference/entitlement-contract-v1.json -- never a prefix and never a pattern.
+#: reference/entitlement-contract-v2.json -- never a prefix and never a pattern.
 _ENTITLEMENT_ENV_KEYS = (
     "KALEIDOSCOPE_API_KEY",
     "KSCOPE_ENTITLEMENT_HOME",
 )
 
 #: Bootstrap first, then entitlement; both groups alphabetical within
-#: themselves. The order is pinned by reference/entitlement-contract-v1.json so
+#: themselves. The order is pinned by reference/entitlement-contract-v2.json so
 #: the TypeScript SDK cannot drift from it.
 _SAFE_ENV_KEYS = _BOOTSTRAP_ENV_KEYS + _ENTITLEMENT_ENV_KEYS
 _MAX_DIAGNOSTIC_BYTES = 4_096
@@ -263,7 +263,7 @@ def safe_bootstrap_environment(*, api_key: str | None = None) -> dict[str, str]:
     Supabase service-role key that bypasses row-level security, anything in a
     .env file -- is not copied, because it is not named. Widening this list is a
     deliberate, reviewed edit to two literal tuples and to
-    reference/entitlement-contract-v1.json, never a prefix or a pattern.
+    reference/entitlement-contract-v2.json, never a prefix or a pattern.
 
     `api_key` is the programmatic route. **The allowlist does not grow to carry
     it**: the value is placed in KALEIDOSCOPE_API_KEY, a name already admitted,
@@ -303,7 +303,7 @@ def _ungated_environment() -> dict[str, str]:
     test_the_ungated_environment_is_a_strict_subset. Used by the ungated spawn
     sites (`profile launch`, `profile show`, `schema`, `gate`) and by the
     manager, none of which reads KALEIDOSCOPE_API_KEY: the engine's gated
-    command list is ["mcp","context","call","serve"], and the gate report reads
+    command list is ["mcp","call"], and the gate report reads
     no key by its own comment.
 
     Narrowing is the only direction this can move, and it is done by removing a
@@ -331,7 +331,7 @@ _safe_process_environment = safe_bootstrap_environment
 #: read by one language only.
 #:
 #: So the set is written out: the UNION of both languages' notions, pinned in
-#: reference/entitlement-contract-v1.json and asserted from both sides. The
+#: reference/entitlement-contract-v2.json and asserted from both sides. The
 #: union rather than the intersection, because a diagnostic is display text and
 #: stripping one separator too many is harmless, whereas the two built-ins
 #: disagreeing is exactly the defect being closed.

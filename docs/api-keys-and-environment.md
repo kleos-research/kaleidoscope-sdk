@@ -1,7 +1,7 @@
 # API keys and the engine's environment
 
-Kaleidoscope is in early access, and the engine needs an API key for the four commands that
-read or write memory: `call`, `context`, `mcp` and `serve`. Everything else works without one,
+Kaleidoscope is in early access, and the engine needs an API key for the two commands that
+read or write memory: `call` and `mcp`. Everything else works without one,
 including `--version`, `schema`, `gate`, `where`, `init`, `profile` and `activate`. To get a
 key, email [contact@kleosresearch.xyz](mailto:contact@kleosresearch.xyz).
 
@@ -69,7 +69,7 @@ Both clients raise an `EntitlementError`. It carries:
 - `diagnostic`: the engine's own output, shortened and with keys masked;
 - `reason`: the refusal code, such as `E_NO_KEY`.
 
-The full list of codes and messages is in `reference/entitlement-contract-v1.json`. A refusal
+The full list of codes and messages is in `reference/entitlement-contract-v2.json`. A refusal
 never changes your vault.
 
 ## Which environment variables reach the engine
@@ -92,7 +92,7 @@ Some related-looking names are deliberately never copied, including `KSCOPE_PROF
 setting that only the `kaleidoscope` manager reads, for its own list of profiles.
 
 The complete lists, both copied and never copied, are in
-`reference/entitlement-contract-v1.json`. Both clients are tested against that file.
+`reference/entitlement-contract-v2.json`. Both clients are tested against that file.
 
 The `kaleidoscope` manager builds the engine's environment the same way, from a shorter list of
 its own. It passes the same two key variables and `KSCOPE_PROFILE_HOME`. It does not pass

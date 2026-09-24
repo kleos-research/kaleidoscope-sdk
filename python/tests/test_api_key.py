@@ -59,7 +59,7 @@ from kaleidoscope_memory.session import PersistentKaleidoscopeSession
 
 ROOT = Path(__file__).parents[2]
 REFERENCE = ROOT / "reference"
-GOLDEN = json.loads((REFERENCE / "entitlement-contract-v1.json").read_text())
+GOLDEN = json.loads((REFERENCE / "entitlement-contract-v2.json").read_text())
 PACKAGE = Path(__file__).parents[1] / "src" / "kaleidoscope_memory"
 FAKE_MANAGER = Path(__file__).parent / "fixtures" / "fake_manager.py"
 #: The fixtures write their record inside a directory the allowlist DOES

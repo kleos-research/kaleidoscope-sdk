@@ -32,7 +32,7 @@ ones a change here most often breaks.
 
 7. **The engine's environment is an allowlist of names.** To pass another variable to the
    engine, change the literal lists in `python/src/kaleidoscope_memory/descriptor.py` and
-   `typescript/src/descriptor.ts` and the file `reference/entitlement-contract-v1.json`
+   `typescript/src/descriptor.ts` and the file `reference/entitlement-contract-v2.json`
    together (the manager keeps its own list in `src/engine.rs`). Never add a prefix or a
    pattern. See [docs/api-keys-and-environment.md](docs/api-keys-and-environment.md).
 

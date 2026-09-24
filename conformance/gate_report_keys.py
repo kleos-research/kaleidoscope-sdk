@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The gate facts in reference/entitlement-contract-v1.json, taken from the engine.
+"""The gate facts in reference/entitlement-contract-v2.json, taken from the engine.
 
 The engine owns what `kscope gate` prints, and its own tests hold the command
 to that shape. This repository's record of it -- the
@@ -28,7 +28,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT = ROOT / "reference" / "entitlement-contract-v1.json"
+CONTRACT = ROOT / "reference" / "entitlement-contract-v2.json"
 
 
 def gate_report(engine: Path) -> dict:

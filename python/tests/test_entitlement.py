@@ -46,7 +46,7 @@ from kaleidoscope_memory.native import Controller
 from kaleidoscope_memory.session import PersistentKaleidoscopeSession
 
 REFERENCE = Path(__file__).parents[2] / "reference"
-GOLDEN = json.loads((REFERENCE / "entitlement-contract-v1.json").read_text())
+GOLDEN = json.loads((REFERENCE / "entitlement-contract-v2.json").read_text())
 
 #: Obviously not a secret, and identical in shape to the engine suite's KEY_A.
 VALID_KEY = "ksk_alpha." + "A" * 43
@@ -687,7 +687,7 @@ def test_messages_match_the_shared_golden() -> None:
 
 
 def test_the_golden_pins_the_wire_level_contract() -> None:
-    assert GOLDEN["contract_version"] == 1
+    assert GOLDEN["contract_version"] == 2
     assert GOLDEN["exit_codes"]["entitlement_refused"] == 4
     assert GOLDEN["refusal_marker_prefix"] == "kscope-entitlement-refusal: "
     assert list(ENTITLEMENT_REFUSAL_IDENTIFIERS) == GOLDEN["refusal_identifiers"]
@@ -753,7 +753,7 @@ async def test_the_invocation_counter_can_reach_two(
 
 
 def test_the_shared_contract_is_committed_where_the_poison_scan_reaches_it() -> None:
-    path = REFERENCE / "entitlement-contract-v1.json"
+    path = REFERENCE / "entitlement-contract-v2.json"
     assert path.is_file()
     assert "COPIES" in GOLDEN["_comment"]
     # test_repository_contract.py runs scripts/poison_scan.py over this whole

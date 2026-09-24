@@ -1,6 +1,6 @@
 {
   "_comment": "The frozen alpha-entitlement contract shared by three implementations. THIS FILE HAS COPIES. Authored here; consumed by python/ (tests/test_entitlement.py) and typescript/ (test/entitlement.test.ts); kept in agreement, field for field, with the engine's own contract-test fixture, which the engine asserts against. Editing one copy and not the others is what the goldens exist to catch.",
-  "contract_version": 1,
+  "contract_version": 2,
   "bootstrap_environment": [
     "APPDATA",
     "HOME",
@@ -106,9 +106,7 @@
   "gate_marker_absent": "kaleidoscope.alpha-entitlement-gate.v1:absent",
   "gated_commands": [
     "mcp",
-    "context",
-    "call",
-    "serve"
+    "call"
   ],
   "key_file_name": "api-key",
   "max_key_file_bytes": 256,

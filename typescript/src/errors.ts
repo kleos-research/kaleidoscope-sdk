@@ -23,7 +23,7 @@ export const MISSING_KEY_FILE_PLACEHOLDER = "the key file";
 
 /**
  * The SDK's own actionable text for every entitlement refusal, one template per
- * identifier, byte-identical to reference/entitlement-contract-v1.json and to
+ * identifier, byte-identical to reference/entitlement-contract-v2.json and to
  * the Python SDK's copy.
  *
  * These are NOT the engine's prose. The engine's prose is attached separately
@@ -125,7 +125,7 @@ export function renderEntitlementMessage(reason: string, keyFile?: string | unde
  * NativeRefusalError, which is here for the same reason.
  *
  * `message` is this SDK's own actionable text (reference/
- * entitlement-contract-v1.json). `diagnostic` is the engine's bounded,
+ * entitlement-contract-v2.json). `diagnostic` is the engine's bounded,
  * redacted stderr, attached as evidence and never as the instruction.
  */
 export class EntitlementError extends IntegrationError {

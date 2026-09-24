@@ -109,7 +109,7 @@ have produced a false positive:
 * The entitlement variable names -- `KALEIDOSCOPE_API_KEY`,
   `KSCOPE_ENTITLEMENT_HOME`, `KSCOPE_ENTITLEMENT_PROBE`,
   `KALEIDOSCOPE_CONTROL_PLANE_ORIGIN`, `KSCOPE_PROFILE_HOME`. All five are in
-  `reference/entitlement-contract-v1.json`, which is a public contract the SDKs
+  `reference/entitlement-contract-v2.json`, which is a public contract the SDKs
   are asserted against. Naming a variable is not disclosing an engine internal;
   saying which source file reads it is, and rule 4 catches that. The allowlist's
   entire defence is that a reader can see which names are on it, so a scanner

@@ -88,7 +88,7 @@ hand, and do not restate the versions or digests they hold anywhere else: a seco
 and nothing notices. `--check` recomputes every derived value from the committed files, offline,
 and runs in CI.
 
-The gate facts in `reference/entitlement-contract-v1.json` -- `gate_report_keys`, the two
+The gate facts in `reference/entitlement-contract-v2.json` -- `gate_report_keys`, the two
 markers and `gated_commands` -- describe what the engine's `kscope gate` prints, which the
 engine owns. Before the pin moves to a release, check them against that release's engine, an
 ungated and a gated build, and take any difference from the engine rather than typing it:

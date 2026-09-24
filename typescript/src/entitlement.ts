@@ -117,7 +117,7 @@ const MARKER = /^kscope-entitlement-refusal: ([A-Z][A-Z0-9_]{2,39})$/gmu;
  * and upgrading cannot help.
  *
  * The fix is not "add one more string". It is that the identifier set is frozen
- * in reference/entitlement-contract-v1.json and asserted from all three
+ * in reference/entitlement-contract-v2.json and asserted from all three
  * implementations -- this SDK, the Python SDK, and the engine's own contract
  * test -- against that one file. A tenth identifier therefore cannot reach a
  * user through an SDK that has not been taught it: the three fail together, at

@@ -1245,11 +1245,12 @@ fn agents_md_is_installed_once_for_codex_and_opencode_together() {
 /// defect, and only invoking it can tell the difference.
 ///
 /// T-B24 rides along, and its subject CHANGED. It used to assert the hook made
-/// no gated engine call at all (`mcp`, `context`, `call`, `serve`). The hook now
-/// deliberately makes two of those, because the alternative was the defect this
-/// change exists to fix: it speaks MCP to the registered server rather than
-/// asserting "connected" without checking, and it retrieves memories rather
-/// than emitting a reminder to go and get some.
+/// no gated engine call at all (`mcp` and `call` today; `context` and `serve`
+/// too, before the engine deleted them). The hook now deliberately makes both,
+/// because the alternative was the defect this change exists to fix: it speaks
+/// MCP to the registered server rather than asserting "connected" without
+/// checking, and it retrieves memories rather than emitting a reminder to go
+/// and get some.
 ///
 /// So the property under test is now the narrower and more useful one:
 ///
@@ -1258,7 +1259,8 @@ fn agents_md_is_installed_once_for_codex_and_opencode_together() {
 ///  * the hook never WRITES -- no `remember` reaches the engine, from a hook
 ///    that fires on every startup, resume, clear and compact;
 ///  * `serve` is never invoked, because a session start must not leave a
-///    long-lived server behind it.
+///    long-lived server behind it. Current engines no longer have `serve`; the
+///    check stays for older ones.
 #[test]
 fn the_installed_hook_actually_fires_and_probes_but_never_writes() {
     let fixture = Fixture::new(false);

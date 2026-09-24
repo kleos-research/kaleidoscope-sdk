@@ -56,7 +56,7 @@ function gate() {
     ? {
         status: "enforcing",
         entitlement_build: true,
-        gated_commands: ["mcp", "context", "call", "serve"],
+        gated_commands: ["mcp", "call"],
         entitlement_home: suppressKeyFile ? null : entitlementHome,
         key_file: suppressKeyFile ? null : keyFile,
         build_features: "bundled-model,entitlement",
