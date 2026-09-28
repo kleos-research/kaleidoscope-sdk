@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
 from typing import IO, Any, Mapping, Self
@@ -23,6 +25,42 @@ from .descriptor import (
 from .entitlement import classify_refusal, entitlement_preflight
 from .errors import ChildProcessError, EntitlementError, ProtocolError, ToolRefusalError
 from .tool_definition import ToolDefinition
+
+
+@dataclass(frozen=True)
+class PartialBatch:
+    """A remember batch the engine wrote in part.
+
+    The engine answers such a batch with ``isError=true`` and a first line,
+    ``Not written | F of N items: item K (items[I]), ... .``, naming each item
+    it did not write; every other item is stored (the engine's journey-bugs.md
+    DATA-3 step 3). ``not_written`` are those items' indexes in ``items``.
+    """
+
+    not_written: tuple[int, ...]
+    total: int
+    stored: int
+
+
+_NOT_WRITTEN = re.compile(r"Not written \| (\d+) of (\d+) items: (.*?)\. ")
+_ITEM_INDEX = re.compile(r"\(items\[(\d+)\]\)")
+
+
+def partial_batch(text: str) -> PartialBatch | None:
+    """The batch ``text`` reports as written in part, or None.
+
+    None for any other text, and for a batch that stored nothing: that is a
+    refusal, and :meth:`PersistentKaleidoscopeSession.call_text` raises it.
+    """
+
+    match = _NOT_WRITTEN.match(text.split("\n", 1)[0])
+    if match is None:
+        return None
+    failed, total = int(match[1]), int(match[2])
+    indexes = tuple(int(index) for index in _ITEM_INDEX.findall(match[3]))
+    if not 0 < failed < total or len(indexes) != failed:
+        return None
+    return PartialBatch(not_written=indexes, total=total, stored=total - failed)
 
 
 @lru_cache(maxsize=4)
@@ -350,7 +388,10 @@ class PersistentKaleidoscopeSession:
         if not result.content or any(not isinstance(block, TextContent) for block in result.content):
             raise ProtocolError("Kaleidoscope tool result must contain text blocks only")
         text = "\n".join(block.text for block in result.content)
-        if is_error:
+        # A batch written in part is an error the engine reports so the agent
+        # resends what was lost, but its other items are stored: returned, not
+        # raised as though nothing were saved (see `partial_batch`).
+        if is_error and partial_batch(text) is None:
             raise ToolRefusalError(tool, text)
         return text
 

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   loadLaunchDescriptor,
+  partialBatch,
   PersistentKaleidoscopeSession,
   ProtocolContractError,
   ToolRefusalError,
@@ -87,4 +88,28 @@ test("discovery, structured output, and tool refusal fail closed", async (contex
       ToolRefusalError,
     );
   });
+});
+
+test("a partly written remember batch is reported, not thrown", async () => {
+  // The engine answers isError=true when a remember batch wrote some items
+  // and not others (its DATA-3 step 3). callText returns that receipt, which
+  // names the items not written and says the others are stored; a batch that
+  // wrote nothing is still a ToolRefusalError.
+  const partly = loadLaunchDescriptor(FAKE_BINARY, "partial");
+  {
+    await using memory = await new PersistentKaleidoscopeSession(partly).connect();
+    const text = await memory.rememberRaw({ mode: "create", content_md: "# test" });
+    assert.ok(text.startsWith("Not written | 1 of 2 items: item 2 (items[1])."), text);
+    assert.ok(text.includes("Item 1 | Created"), text);
+    assert.deepEqual(partialBatch(text), { notWritten: [1], total: 2, stored: 1 });
+  }
+  const nothing = loadLaunchDescriptor(FAKE_BINARY, "unwritten");
+  {
+    await using memory = await new PersistentKaleidoscopeSession(nothing).connect();
+    await assert.rejects(
+      () => memory.rememberRaw({ mode: "create", content_md: "# test" }),
+      ToolRefusalError,
+    );
+  }
+  assert.equal(partialBatch("Item 1 | Created"), undefined);
 });

@@ -94,3 +94,34 @@ async def test_preserves_tool_refusal_category(fake_binary: Path) -> None:
         with pytest.raises(ToolRefusalError) as refusal:
             await memory.remember_raw({"mode": "create", "content_md": "# test"})
     assert "invalid_schema" in refusal.value.text
+
+
+def test_a_partly_written_batch_is_reported_not_raised(fake_binary: Path) -> None:
+    """The engine answers isError=true when a remember batch wrote some items
+    and not others (its DATA-3 step 3). The SDK returns that receipt, which
+    names the items not written and says the others are stored, instead of
+    raising ToolRefusalError as if nothing were saved; a batch that wrote
+    nothing is still a refusal. Sync, driving the loop itself, so it runs
+    without the pytest-asyncio plugin."""
+
+    import asyncio
+
+    from kaleidoscope_memory.session import partial_batch
+
+    async def remember(profile: str) -> str:
+        launch = load_launch_descriptor(fake_binary, profile)
+        async with PersistentKaleidoscopeSession(launch) as memory:
+            return await memory.remember_raw({"mode": "create", "content_md": "# test"})
+
+    text = asyncio.run(remember("partial"))
+    assert text.startswith("Not written | 1 of 2 items: item 2 (items[1])."), text
+    assert "Item 1 | Created" in text
+    report = partial_batch(text)
+    assert report is not None
+    assert (report.not_written, report.total, report.stored) == ((1,), 2, 1)
+
+    with pytest.raises(ToolRefusalError) as refusal:
+        asyncio.run(remember("unwritten"))
+    assert "Nothing was stored" in refusal.value.text
+    assert partial_batch(refusal.value.text) is None
+    assert partial_batch("Item 1 | Created") is None

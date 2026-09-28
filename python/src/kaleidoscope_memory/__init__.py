@@ -57,7 +57,7 @@ from .native import (
     resolve_binary,
     resolve_manager,
 )
-from .session import PersistentKaleidoscopeSession
+from .session import PartialBatch, PersistentKaleidoscopeSession, partial_batch
 from .tool_definition import ToolDefinition
 from .tools import KaleidoscopeMemory
 
@@ -89,7 +89,9 @@ __all__ = [
     "OutputLimitError",
     "Profile",
     "ProtocolError",
+    "PartialBatch",
     "PersistentKaleidoscopeSession",
+    "partial_batch",
     "ToolRefusalError",
     "AccountStatus",
     "ACCOUNT_ENVIRONMENT_KEYS",
