@@ -9,6 +9,11 @@ use crate::error::{ManagerError, Result};
 pub const PROFILE_VERSION: u32 = 1;
 pub const LAUNCH_DESCRIPTOR_VERSION: u32 = 1;
 pub const PUBLIC_TOOLS: [&str; 2] = ["search", "remember"];
+/// The one variable a launch descriptor's environment may carry: the profile
+/// store an entry written under `KSCOPE_PROFILE_HOME` needs, so an agent
+/// started outside the shell (from the Dock) finds the profile `kscope init`
+/// made. The engine's decision 3 of 2026-09-28 (its journey-bugs.md RECOV-4).
+pub const PROFILE_HOME_VARIABLE: &str = "KSCOPE_PROFILE_HOME";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -127,6 +132,19 @@ impl LaunchDescriptor {
         })
     }
 
+    /// The environment is closed too: empty, or the profile store and
+    /// nothing else, as an absolute path. The engine's checks accept the same.
+    fn environment_is_valid(&self) -> bool {
+        match self.environment.len() {
+            0 => true,
+            1 => self
+                .environment
+                .get(PROFILE_HOME_VARIABLE)
+                .is_some_and(|store| std::path::Path::new(store).is_absolute()),
+            _ => false,
+        }
+    }
+
     pub fn validate(&self, expected_engine: &std::path::Path, profile: &str) -> Result<()> {
         validate_profile_name(profile)?;
         if self.version != LAUNCH_DESCRIPTOR_VERSION
@@ -134,7 +152,7 @@ impl LaunchDescriptor {
             || self.command != expected_engine
             || self.args != ["mcp", "--profile", profile]
             || self.tools != PUBLIC_TOOLS
-            || !self.environment.is_empty()
+            || !self.environment_is_valid()
             || !self.command.is_absolute()
         {
             return Err(ManagerError::InvalidEngineContract {
@@ -276,5 +294,42 @@ mod tests {
     #[test]
     fn a_stale_count_the_entries_do_not_add_up_to_is_refused() {
         assert!(listing(0).validate().is_err());
+    }
+
+    /// The engine's decision 3 of 2026-09-28 (its journey-bugs.md RECOV-4): a
+    /// v1 launch descriptor may carry the profile store an entry written under
+    /// `KSCOPE_PROFILE_HOME` needs, as an absolute path, and nothing else. The
+    /// engine's two checks and its downstream.toml accept the same shape.
+    #[test]
+    fn a_launch_descriptor_may_carry_the_profile_store_and_nothing_else() {
+        use std::path::Path;
+
+        use super::{LaunchDescriptor, PROFILE_HOME_VARIABLE};
+
+        let engine = Path::new("/opt/kscope/bin/kscope");
+        let bare = LaunchDescriptor::provisional(engine, "default").unwrap();
+        bare.validate(engine, "default").unwrap();
+
+        let mut carried = bare.clone();
+        carried.environment.insert(
+            PROFILE_HOME_VARIABLE.to_owned(),
+            "/opt/kscope/profiles2".to_owned(),
+        );
+        carried.validate(engine, "default").unwrap();
+
+        let mut relative = bare.clone();
+        relative
+            .environment
+            .insert(PROFILE_HOME_VARIABLE.to_owned(), "profiles2".to_owned());
+        assert!(relative.validate(engine, "default").is_err());
+        let mut other = bare;
+        other
+            .environment
+            .insert("KSCOPE_ROOT".to_owned(), "/vaults/kept".to_owned());
+        assert!(other.validate(engine, "default").is_err());
+        let mut both = carried;
+        both.environment
+            .insert("KSCOPE_ROOT".to_owned(), "/vaults/kept".to_owned());
+        assert!(both.validate(engine, "default").is_err());
     }
 }
