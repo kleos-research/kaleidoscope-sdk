@@ -127,8 +127,16 @@ case "$1" in
   profile)
     case "$2" in
       list)
-        names=$(ls -1 "$REG" 2>/dev/null | sort | sed 's/^/"/;s/$/"/' | paste -sd, -)
-        printf '%s\n' '{{"version":1,"profiles":['"$names"']}}'
+        # The engine's shape: the names, then each entry with its validity
+        # and profile, then how many entries are stale.
+        names=""
+        entries=""
+        for name in $(ls -1 "$REG" 2>/dev/null | sort); do
+          names="$names${{names:+,}}\"$name\""
+          profile=$(emit_profile "$name" "$(sed -n 1p "$REG/$name")" "$(sed -n 2p "$REG/$name")")
+          entries="$entries${{entries:+,}}{{\"name\":\"$name\",\"valid\":true,\"profile\":$profile}}"
+        done
+        printf '%s\n' '{{"version":1,"profiles":['"$names"'],"entries":['"$entries"'],"stale":0}}'
         ;;
       show)
         if [ ! -f "$REG/$3" ]; then

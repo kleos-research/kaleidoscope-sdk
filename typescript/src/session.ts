@@ -140,7 +140,10 @@ export class PersistentKaleidoscopeSession {
       throw new ProtocolContractError("Kaleidoscope tool result must contain text blocks only");
     }
     const text = result.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
-    if (result.isError) throw new ToolRefusalError(tool, text);
+    // A batch written in part is an error the engine reports so the agent
+    // resends what was lost, but its other items are stored: returned, not
+    // thrown as though nothing were saved (see `partialBatch`).
+    if (result.isError && partialBatch(text) === undefined) throw new ToolRefusalError(tool, text);
     return text;
   }
 
@@ -163,6 +166,37 @@ export class PersistentKaleidoscopeSession {
   async [Symbol.asyncDispose](): Promise<void> {
     await this.close();
   }
+}
+
+/**
+ * A remember batch the engine wrote in part. The engine answers such a batch
+ * with `isError: true` and a first line, `Not written | F of N items: item K
+ * (items[I]), ... .`, naming each item it did not write; every other item is
+ * stored (the engine's journey-bugs.md DATA-3 step 3). `notWritten` are those
+ * items' indexes in `items`.
+ */
+export interface PartialBatch {
+  readonly notWritten: number[];
+  readonly total: number;
+  readonly stored: number;
+}
+
+const NOT_WRITTEN = /^Not written \| (\d+) of (\d+) items: (.*?)\. /;
+const ITEM_INDEX = /\(items\[(\d+)\]\)/g;
+
+/**
+ * The batch `text` reports as written in part, or `undefined`: for any other
+ * text, and for a batch that stored nothing, which is a refusal that
+ * `callText` throws.
+ */
+export function partialBatch(text: string): PartialBatch | undefined {
+  const match = NOT_WRITTEN.exec(text.split("\n", 1)[0] ?? "");
+  if (!match) return undefined;
+  const failed = Number(match[1]);
+  const total = Number(match[2]);
+  const notWritten = [...(match[3] ?? "").matchAll(ITEM_INDEX)].map((found) => Number(found[1]));
+  if (!(failed > 0 && failed < total) || notWritten.length !== failed) return undefined;
+  return { notWritten, total, stored: total - failed };
 }
 
 function sameSet(left: readonly string[], right: readonly string[]): boolean {

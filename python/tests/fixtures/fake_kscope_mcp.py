@@ -296,7 +296,7 @@ def operation_schema() -> None:
     print(f"fixture schema {operation}")
 
 
-def native_call() -> None:
+def native_call(operation: str, json_receipt: bool) -> None:
     raw = sys.stdin.buffer.read()
     try:
         payload = json.loads(raw)
@@ -337,11 +337,16 @@ def native_call() -> None:
     if mode == "gate_check":
         gate_check()
 
+    if operation in ("search", "remember") and not json_receipt:
+        # The engine prints a text receipt for an applied search or remember and
+        # the response object only when `--json` is on the line.
+        print("Kaleidoscope fixture receipt: not JSON without --json")
+        return
     print(
         json.dumps(
             {
                 "status": "accepted",
-                "operation": sys.argv[4],
+                "operation": operation,
                 "invocation": invocation,
                 "payload_sha256": hashlib.sha256(raw).hexdigest(),
                 "payload": payload,
@@ -470,6 +475,37 @@ def run_mcp() -> None:
             del mode, content_md
             raise ToolError('{"status":"refused","code":"invalid_schema"}')
 
+    elif profile in ("partial", "unwritten"):
+        # The engine's reply to a remember batch with an item it did not write
+        # (its journey-bugs.md DATA-3 step 3): isError=true, and a first line
+        # naming each item not written and how many were stored.
+        lead = (
+            "Not written | 1 of 2 items: item 2 (items[1]). The other item is stored: do not "
+            "resend it. Fix each item named here as its Reason below says, and resend only those."
+            if profile == "partial"
+            else "Not written | 2 of 2 items: item 1 (items[0]), item 2 (items[1]). Nothing was "
+            "stored: fix each item as its Reason below says, and resend them."
+        )
+        first = (
+            "Item 1 | Created | mem_fixture_a"
+            if profile == "partial"
+            else "Item 1 | Refused\nReason: no fact"
+        )
+
+        # Returned whole, as the engine sends it: a ToolError would gain the
+        # SDK server's "Error executing tool" prefix, which the engine's
+        # reply does not have.
+        try:
+            from mcp.types import CallToolResult, TextContent
+        except ImportError:  # MCP Python SDK 2
+            from mcp_types import CallToolResult, TextContent
+
+        @server.tool(name="remember", structured_output=False)
+        def remember(mode: str, content_md: str | None = None) -> Any:
+            del mode, content_md
+            text = f"{lead}\n{first}\n\nItem 2 | Refused\nReason: no fact"
+            return CallToolResult(content=[TextContent(type="text", text=text)], isError=True)
+
     else:
 
         @server.tool(name="remember", structured_output=False)
@@ -493,12 +529,14 @@ def run_mcp() -> None:
 
 
 if __name__ == "__main__":
+    # Like the engine, a `call` takes `--json` anywhere on its line.
+    CALL_ARGV = [argument for argument in sys.argv if argument != "--json"]
     if len(sys.argv) == 4 and sys.argv[1:3] == ["profile", "launch"]:
         profile_launch()
     elif len(sys.argv) == 4 and sys.argv[1:3] == ["profile", "show"]:
         profile_show()
-    elif len(sys.argv) == 5 and sys.argv[1:3] == ["call", "--profile"]:
-        native_call()
+    elif sys.argv[1:3] == ["call", "--profile"] and len(CALL_ARGV) == 5:
+        native_call(CALL_ARGV[4], json_receipt=len(CALL_ARGV) < len(sys.argv))
     elif len(sys.argv) == 2 and sys.argv[1] == "gate":
         gate_report()
     elif len(sys.argv) in (2, 3) and sys.argv[1] == "schema":
