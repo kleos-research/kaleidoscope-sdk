@@ -15,7 +15,7 @@ the one test against the real tree only reads it. Every `--apply` here passes
 the one registry read the writer makes, and this suite is offline.
 
 The fixture release is built from the committed contract and a synthetic
-manifest. Its commit id is computed rather than written down, because a bare
+manifest, once per public-contract version the sync accepts. Its commit id is computed rather than written down, because a bare
 40-hex literal in a test file is what the poison scan's rule 6 exists to stop.
 """
 
@@ -52,6 +52,29 @@ FIXTURE_VERSION = json.loads((ROOT / "reference" / "binary-pin.json").read_text(
 #: digest so a test can tell the two apart.
 FIXTURE_PUBLISHED_SHA256 = hashlib.sha256(b"fixture published executable").hexdigest()
 FIXTURE_PUBLISHED_BYTES = 22993280
+
+#: The public-contract versions the sync accepts, one fixture release each.
+CONTRACT_V1 = "kaleidoscope.public-contract.v1"
+CONTRACT_V2 = "kaleidoscope.public-contract.v2"
+
+
+def _as_v2(document: dict) -> dict:
+    """The committed contract carrying v2's changes.
+
+    v2 retired `feedback` and `address_maintenance`, so they leave the
+    operator-only commands and join the retired agent tools; it dropped the
+    model's display name; and it publishes a batch bound of 50.
+    """
+
+    retired = {"address_maintenance", "feedback"}
+    document["cli"]["operator_only_commands"] = [
+        name for name in document["cli"]["operator_only_commands"] if name not in retired
+    ]
+    agent_tools = document["retired_operations"]["agent_tools"]
+    document["retired_operations"]["agent_tools"] = sorted(set(agent_tools) | retired)
+    document["embedding_model"]["model"].pop("name", None)
+    document["limits"]["remember_batch_items"] = 50
+    return document
 
 
 def _run(*arguments: str, root: Path) -> subprocess.CompletedProcess[str]:
@@ -94,7 +117,9 @@ def _unresolve_platform_entry(root: Path) -> None:
     lock_path.write_text(json.dumps(lock, indent=2) + "\n")
 
 
-def _build_release(directory: Path, *, contract_bytes: bytes | None = None) -> Path:
+def _build_release(
+    directory: Path, *, contract_bytes: bytes | None = None, schema_version: str = CONTRACT_V1
+) -> Path:
     """A release-assets directory shaped exactly like the engine's release job writes it."""
 
     directory.mkdir(parents=True)
@@ -114,6 +139,9 @@ def _build_release(directory: Path, *, contract_bytes: bytes | None = None) -> P
         # generated from -- darwin-arm64 at 0.0.5, linux-x64 at 0.0.7 -- so
         # leaving it untouched ties these tests to one release's build host.
         document["target"] = {"triple": "aarch64-apple-darwin"}
+        if schema_version == CONTRACT_V2:
+            document = _as_v2(document)
+        document["schema_version"] = schema_version
         contract_bytes = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
     contract.write_bytes(contract_bytes)
     (directory / "kaleidoscope-public-contract.provenance.json").write_text(
@@ -162,7 +190,7 @@ def _build_release(directory: Path, *, contract_bytes: bytes | None = None) -> P
         "public_contract": {
             "path": "kaleidoscope-public-contract.json",
             "sha256": _digest(contract),
-            "schema_version": "kaleidoscope.public-contract.v1",
+            "schema_version": schema_version,
             "mcp_protocol_revision": "2025-11-25",
         },
         "cli_help": {"path": "kscope-help.txt", "sha256": _digest(directory / "kscope-help.txt")},
@@ -221,10 +249,13 @@ def test_a_platform_pin_that_drifts_from_the_release_version_fails_the_check(tmp
     assert "typescript/package-lock.json" in completed.stderr
 
 
-def test_apply_takes_the_release_whole_and_leaves_a_tree_the_check_accepts(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema_version", [CONTRACT_V1, CONTRACT_V2])
+def test_apply_takes_the_release_whole_and_leaves_a_tree_the_check_accepts(
+    tmp_path: Path, schema_version: str
+) -> None:
     root = _copy_tree(tmp_path / "repository")
     _unresolve_platform_entry(root)
-    release = _build_release(tmp_path / "release-assets")
+    release = _build_release(tmp_path / "release-assets", schema_version=schema_version)
     before_package = json.loads((root / "typescript" / "package.json").read_text())
 
     completed = _apply(release, root)
@@ -238,6 +269,7 @@ def test_apply_takes_the_release_whole_and_leaves_a_tree_the_check_accepts(tmp_p
     contract_asset = release / "kaleidoscope-public-contract.json"
     vendored = root / "reference" / "kaleidoscope-public-contract.json"
     assert vendored.read_bytes() == contract_asset.read_bytes()
+    assert json.loads(vendored.read_text())["schema_version"] == schema_version
 
     pin = json.loads((root / "reference" / "binary-pin.json").read_text())
     manifest = json.loads((release / "release.json").read_text())
@@ -313,6 +345,34 @@ def test_apply_refuses_a_release_whose_asset_digest_disagrees_and_writes_nothing
     completed = _apply(release, root)
     assert completed.returncode == 1
     assert "kaleidoscope-public-contract.json" in completed.stderr
+    assert "nothing was written" in completed.stderr
+    assert {relative: (root / relative).read_bytes() for relative in SYNCED} == before
+
+
+@pytest.mark.parametrize(
+    ("contract_version", "manifest_version", "expected"),
+    [
+        # A version the sync does not read, named the same by both documents.
+        ("kaleidoscope.public-contract.v3", "kaleidoscope.public-contract.v3", "expected one of"),
+        # Two accepted versions, but not the same one.
+        (CONTRACT_V2, CONTRACT_V1, f"but kaleidoscope-public-contract.json says {CONTRACT_V2!r}"),
+        (CONTRACT_V1, CONTRACT_V2, f"but kaleidoscope-public-contract.json says {CONTRACT_V1!r}"),
+    ],
+)
+def test_apply_refuses_a_contract_version_it_does_not_read_or_the_manifest_misnames(
+    tmp_path: Path, contract_version: str, manifest_version: str, expected: str
+) -> None:
+    root = _copy_tree(tmp_path / "repository")
+    before = {relative: (root / relative).read_bytes() for relative in SYNCED}
+    release = _build_release(tmp_path / "release-assets", schema_version=contract_version)
+    manifest_path = release / "release.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["public_contract"]["schema_version"] = manifest_version
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+    completed = _apply(release, root)
+    assert completed.returncode == 1
+    assert expected in completed.stderr
     assert "nothing was written" in completed.stderr
     assert {relative: (root / relative).read_bytes() for relative in SYNCED} == before
 

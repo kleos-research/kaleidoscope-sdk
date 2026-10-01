@@ -96,7 +96,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 MANIFEST_SCHEMA = "kaleidoscope.release-manifest.v1"
-CONTRACT_SCHEMA = "kaleidoscope.public-contract.v1"
+#: The public-contract versions this script reads. v2 renamed the version and
+#: corrected lists nothing here reads; the fields this script does read -- the
+#: executable digest, the target triple, the product version and the MCP
+#: protocol range -- are the same in both. The manifest and provenance records
+#: stayed at v1.
+CONTRACT_SCHEMAS = ("kaleidoscope.public-contract.v1", "kaleidoscope.public-contract.v2")
 PROVENANCE_SCHEMA = "kaleidoscope.public-contract-provenance.v1"
 
 MANIFEST_NAME = "release.json"
@@ -287,10 +292,10 @@ def verify_release(release: Path) -> tuple[dict, list[str]]:
             )
 
     if isinstance(contract_entry, dict):
-        if contract_entry.get("schema_version") != CONTRACT_SCHEMA:
+        if contract_entry.get("schema_version") not in CONTRACT_SCHEMAS:
             problems.append(
                 f"{MANIFEST_NAME}: public_contract.schema_version is "
-                f"{contract_entry.get('schema_version')!r}, expected {CONTRACT_SCHEMA!r}"
+                f"{contract_entry.get('schema_version')!r}, expected one of {CONTRACT_SCHEMAS!r}"
             )
         if not isinstance(contract_entry.get("mcp_protocol_revision"), str):
             problems.append(f"{MANIFEST_NAME}: public_contract.mcp_protocol_revision is missing")
@@ -307,6 +312,15 @@ def verify_release(release: Path) -> tuple[dict, list[str]]:
         else:
             problems.extend(f"{CONTRACT_NAME}: {item}" for item in contract_shape_problems(contract))
             if isinstance(contract_entry, dict):
+                # Two accepted versions make this a check of its own: a
+                # manifest naming one version around a contract of the other
+                # is two documents claiming to be one.
+                if contract_entry.get("schema_version") != contract.get("schema_version"):
+                    problems.append(
+                        f"{MANIFEST_NAME}: public_contract.schema_version is "
+                        f"{contract_entry.get('schema_version')!r} but {CONTRACT_NAME} says "
+                        f"{contract.get('schema_version')!r}"
+                    )
                 revision = contract_entry.get("mcp_protocol_revision")
                 if isinstance(revision, str):
                     problems.extend(
@@ -407,9 +421,9 @@ def contract_product_version(contract: dict) -> object:
 
 def contract_shape_problems(contract: dict) -> list[str]:
     problems: list[str] = []
-    if contract.get("schema_version") != CONTRACT_SCHEMA:
+    if contract.get("schema_version") not in CONTRACT_SCHEMAS:
         problems.append(
-            f"schema_version is {contract.get('schema_version')!r}, expected {CONTRACT_SCHEMA!r}"
+            f"schema_version is {contract.get('schema_version')!r}, expected one of {CONTRACT_SCHEMAS!r}"
         )
     executable = contract.get("executable")
     if not isinstance(executable, dict) or not _hex(executable.get("sha256"), 64):
