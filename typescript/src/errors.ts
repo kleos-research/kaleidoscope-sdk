@@ -182,6 +182,16 @@ export class ProtocolContractError extends IntegrationError {
   override readonly code: string = "protocol_contract";
 }
 
+/**
+ * A direct native call returned a parsed refusal envelope.
+ *
+ * `response` is the engine's envelope, unchanged. A refusal is not retried,
+ * with one exception: the busy-vault refusal (`response.code === "contended"`),
+ * which says another call held the vault and the same call should be sent
+ * again. `Controller` sends it again within its attempt budget and deadline,
+ * and throws this error only if the vault is still busy when they run out.
+ * `Operator` makes one attempt and never retries.
+ */
 export class NativeRefusalError extends IntegrationError {
   override readonly code: string = "native_refusal";
   readonly operation: string;

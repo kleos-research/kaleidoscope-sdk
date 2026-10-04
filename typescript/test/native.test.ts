@@ -24,8 +24,17 @@ const NATIVE_GOLDEN = JSON.parse(
 ) as {
   request: Record<string, unknown>;
   success: Record<string, unknown>;
-  retry: { maximum_attempts: number };
+  retry: { maximum_attempts: number; retryable_refusal_codes: string[] };
 };
+
+const PUBLIC_REFUSAL_CODES = (
+  JSON.parse(
+    readFileSync(
+      new URL("../../reference/kaleidoscope-public-contract.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { errors: { codes: string[] } }
+).errors.codes;
 
 test("TypeScript controller returns parsed native JSON", async () => {
   const descriptor = loadLaunchDescriptor(FAKE_BINARY, "native");
@@ -117,6 +126,137 @@ test("native refusal, invalid JSON, and stderr flood are not retried", async () 
       OutputLimitError,
     );
     assert.equal(readFileSync(flood, "utf8"), "1");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("busy refusal is sent again and the second answer is returned", async () => {
+  // The engine's busy-vault refusal says to send the same call again. Before
+  // this branch the SDK only retried a refusal that printed nothing on stdout,
+  // which is how an engine older than the refusal envelope reported it.
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const directory = mkdtempSync(join(tmpdir(), "kscope-ts-busy-"));
+  const marker = join(directory, "count");
+  try {
+    const descriptor = loadLaunchDescriptor(FAKE_BINARY, "native");
+    const arguments_ = { _fixture_mode: "contended_once", marker, query: "same bytes" };
+    const result = (await new Controller(descriptor, { timeoutMs: 5_000 }).rememberRaw(
+      arguments_,
+    )) as Record<string, unknown>;
+    const encoded = JSON.stringify({ _fixture_mode: "contended_once", marker, query: "same bytes" });
+    assert.equal(result.status, "accepted");
+    assert.equal(result.invocation, NATIVE_GOLDEN.retry.maximum_attempts);
+    assert.equal(result.payload_sha256, createHash("sha256").update(encoded).digest("hex"));
+    assert.equal(readFileSync(marker, "utf8"), "2");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a vault busy on every attempt throws the engine's refusal", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const directory = mkdtempSync(join(tmpdir(), "kscope-ts-busy-"));
+  const marker = join(directory, "count");
+  try {
+    const descriptor = loadLaunchDescriptor(FAKE_BINARY, "native");
+    await assert.rejects(
+      () =>
+        new Controller(descriptor, { timeoutMs: 5_000 }).searchRaw({
+          _fixture_mode: "contended",
+          marker,
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof NativeRefusalError);
+        assert.equal(error.operation, "search");
+        const response = error.response as Record<string, unknown>;
+        assert.equal(response.status, "refused");
+        assert.ok(NATIVE_GOLDEN.retry.retryable_refusal_codes.includes(String(response.code)));
+        assert.ok(String(response.next).startsWith("Busy, not wrong"));
+        return true;
+      },
+    );
+    // Bounded: the busy refusal spends the existing budget and no more.
+    assert.equal(readFileSync(marker, "utf8"), String(NATIVE_GOLDEN.retry.maximum_attempts));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("every other public refusal code is thrown at once", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const directory = mkdtempSync(join(tmpdir(), "kscope-ts-refuse-"));
+  const descriptor = loadLaunchDescriptor(FAKE_BINARY, "native");
+  const codes = PUBLIC_REFUSAL_CODES.filter(
+    (code) => !NATIVE_GOLDEN.retry.retryable_refusal_codes.includes(code),
+  );
+  assert.ok(codes.length > 0);
+  try {
+    for (const code of codes) {
+      const marker = join(directory, code);
+      await assert.rejects(
+        () =>
+          new Controller(descriptor, { timeoutMs: 5_000 }).rememberRaw({
+            _fixture_mode: "refuse_code",
+            _refusal_code: code,
+            marker,
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof NativeRefusalError);
+          assert.equal((error.response as Record<string, unknown>).code, code);
+          return true;
+        },
+      );
+      assert.equal(readFileSync(marker, "utf8"), "1", `${code} was retried`);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a busy refusal with nothing on stdout is still retried", async () => {
+  // An engine older than the refusal envelope prints the busy refusal on
+  // stderr only. That stays a pre-response failure, retried once.
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const directory = mkdtempSync(join(tmpdir(), "kscope-ts-silent-busy-"));
+  const marker = join(directory, "count");
+  try {
+    const descriptor = loadLaunchDescriptor(FAKE_BINARY, "native");
+    const result = (await new Controller(descriptor, { timeoutMs: 5_000 }).searchRaw({
+      _fixture_mode: "silent_busy_once",
+      marker,
+    })) as Record<string, unknown>;
+    assert.equal(result.invocation, 2);
+    assert.equal(readFileSync(marker, "utf8"), "2");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Operator throws a busy refusal without retrying", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const directory = mkdtempSync(join(tmpdir(), "kscope-ts-operator-busy-"));
+  const marker = join(directory, "count");
+  try {
+    const descriptor = loadLaunchDescriptor(FAKE_BINARY, "native");
+    await assert.rejects(
+      () =>
+        new Operator(descriptor, { timeoutMs: 5_000 }).call("maintenance", {
+          _fixture_mode: "contended_once",
+          marker,
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof NativeRefusalError);
+        assert.equal((error.response as Record<string, unknown>).code, "contended");
+        return true;
+      },
+    );
+    assert.equal(readFileSync(marker, "utf8"), "1");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

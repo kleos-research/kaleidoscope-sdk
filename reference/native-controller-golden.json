@@ -18,7 +18,11 @@
     "payload_rule": "identical_canonical_json",
     "eligible": [
       "pre_response_crash",
-      "uncertain_timeout"
+      "uncertain_timeout",
+      "busy_refusal"
+    ],
+    "retryable_refusal_codes": [
+      "contended"
     ],
     "ineligible": [
       "native_refusal",

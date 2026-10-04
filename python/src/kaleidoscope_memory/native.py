@@ -349,17 +349,29 @@ class _NativeCaller:
                 reason = classify_refusal(stderr, process.returncode)
                 if reason is not None:
                     # Deterministic: the second spawn refuses identically, so
-                    # this raises rather than `continue`, joining
-                    # NativeRefusalError and OutputLimitError in the
-                    # non-retryable set. It is also a deliberate refusal, not a
-                    # crash, so it is not a ChildProcessError.
+                    # this raises rather than `continue`, joining every
+                    # NativeRefusalError but the busy one, and OutputLimitError,
+                    # in the non-retryable set. It is also a deliberate
+                    # refusal, not a crash, so it is not a ChildProcessError.
                     raise EntitlementError(
                         reason,
                         diagnostic=_bounded_diagnostic(stderr),
                         key_file=gate.key_file,
                     )
                 if parsed is not None:
-                    raise NativeRefusalError(operation, parsed)
+                    refusal = NativeRefusalError(operation, parsed)
+                    if not _is_busy_refusal(parsed):
+                        raise refusal
+                    # The engine's busy-vault refusal: another call held the
+                    # vault past the engine's own wait, nothing was applied, and
+                    # the envelope's next line says to send the same call again.
+                    # So it takes the next attempt, inside the same deadline;
+                    # if it is still the answer when the budget runs out, the
+                    # engine's refusal is what the caller gets. An engine before
+                    # this envelope existed printed nothing on stdout for the
+                    # same condition, and the branch below still retries that.
+                    last_failure = refusal
+                    continue
                 last_failure = ChildProcessError(
                     f"native child exited {process.returncode} before a JSON response"
                 )
@@ -368,6 +380,8 @@ class _NativeCaller:
                 raise ProtocolError("native child returned non-JSON on a successful exit")
             return parsed
 
+        if isinstance(last_failure, NativeRefusalError):
+            raise last_failure
         if isinstance(last_failure, DeadlineExceededError):
             raise DeadlineExceededError(
                 "native call exhausted its original deadline after one bounded retry"
@@ -375,6 +389,16 @@ class _NativeCaller:
         if last_failure is not None:
             raise ChildProcessError("native call crashed before a response after one bounded retry") from last_failure
         raise DeadlineExceededError("native call deadline elapsed before launch")
+
+
+#: The one refusal code the attempt loop sends again: the engine's busy-vault
+#: refusal. Every other refusal is an answer about the request or the vault,
+#: and a second spawn would only repeat it.
+_BUSY_REFUSAL_CODE = "contended"
+
+
+def _is_busy_refusal(response: Any) -> bool:
+    return isinstance(response, Mapping) and response.get("code") == _BUSY_REFUSAL_CODE
 
 
 def _validate_json_value(value: Any, active: set[int] | None = None) -> None:
