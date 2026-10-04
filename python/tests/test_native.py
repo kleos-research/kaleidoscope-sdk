@@ -88,6 +88,100 @@ async def test_native_refusal_and_protocol_error_are_not_retried(
     assert invalid_marker.read_text() == "1"
 
 
+def public_refusal_codes() -> list[str]:
+    contract = json.loads((REFERENCE / "kaleidoscope-public-contract.json").read_text())
+    return list(contract["errors"]["codes"])
+
+
+@pytest.mark.asyncio
+async def test_busy_refusal_is_sent_again_and_the_second_answer_is_returned(
+    fake_binary: Path, tmp_path: Path
+) -> None:
+    # The engine's busy-vault refusal says to send the same call again. Before
+    # this branch the SDK only retried a refusal that printed nothing on stdout,
+    # which is how an engine older than the refusal envelope reported it.
+    descriptor = load_launch_descriptor(fake_binary, "native")
+    marker = tmp_path / "busy-count"
+    arguments = {"_fixture_mode": "contended_once", "marker": str(marker), "query": "same bytes"}
+    result = await Controller(descriptor, timeout_seconds=5).remember_raw(arguments)
+    encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":")).encode()
+    import hashlib
+
+    assert result["status"] == "accepted"
+    assert result["invocation"] == native_golden()["retry"]["maximum_attempts"]
+    assert result["payload_sha256"] == hashlib.sha256(encoded).hexdigest()
+    assert marker.read_text() == "2"
+
+
+@pytest.mark.asyncio
+async def test_a_vault_busy_on_every_attempt_raises_the_engines_refusal(
+    fake_binary: Path, tmp_path: Path
+) -> None:
+    descriptor = load_launch_descriptor(fake_binary, "native")
+    marker = tmp_path / "busy-count"
+    with pytest.raises(NativeRefusalError) as refusal:
+        await Controller(descriptor, timeout_seconds=5).search_raw(
+            {"_fixture_mode": "contended", "marker": str(marker)}
+        )
+    assert refusal.value.operation == "search"
+    assert refusal.value.response["status"] == "refused"
+    assert refusal.value.response["code"] in native_golden()["retry"]["retryable_refusal_codes"]
+    assert refusal.value.response["next"].startswith("Busy, not wrong")
+    # Bounded: the busy refusal spends the existing budget and no more.
+    assert marker.read_text() == str(native_golden()["retry"]["maximum_attempts"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code",
+    [
+        code
+        for code in public_refusal_codes()
+        if code not in native_golden()["retry"]["retryable_refusal_codes"]
+    ],
+)
+async def test_every_other_public_refusal_code_is_raised_at_once(
+    fake_binary: Path, tmp_path: Path, code: str
+) -> None:
+    descriptor = load_launch_descriptor(fake_binary, "native")
+    marker = tmp_path / "refusal-count"
+    with pytest.raises(NativeRefusalError) as refusal:
+        await Controller(descriptor, timeout_seconds=5).remember_raw(
+            {"_fixture_mode": "refuse_code", "_refusal_code": code, "marker": str(marker)}
+        )
+    assert refusal.value.response["code"] == code
+    assert marker.read_text() == "1"
+
+
+@pytest.mark.asyncio
+async def test_a_busy_refusal_with_nothing_on_stdout_is_still_retried(
+    fake_binary: Path, tmp_path: Path
+) -> None:
+    # An engine older than the refusal envelope prints the busy refusal on
+    # stderr only. That stays a pre-response failure, retried once.
+    descriptor = load_launch_descriptor(fake_binary, "native")
+    marker = tmp_path / "silent-busy-count"
+    result = await Controller(descriptor, timeout_seconds=5).search_raw(
+        {"_fixture_mode": "silent_busy_once", "marker": str(marker)}
+    )
+    assert result["invocation"] == 2
+    assert marker.read_text() == "2"
+
+
+@pytest.mark.asyncio
+async def test_operator_raises_a_busy_refusal_without_retrying(
+    fake_binary: Path, tmp_path: Path
+) -> None:
+    descriptor = load_launch_descriptor(fake_binary, "native")
+    marker = tmp_path / "operator-busy-count"
+    with pytest.raises(NativeRefusalError) as refusal:
+        await Operator(descriptor, timeout_seconds=5).call(
+            "maintenance", {"_fixture_mode": "contended_once", "marker": str(marker)}
+        )
+    assert refusal.value.response["code"] == "contended"
+    assert marker.read_text() == "1"
+
+
 @pytest.mark.asyncio
 async def test_non_json_arguments_fail_before_process_launch(fake_binary: Path) -> None:
     descriptor = load_launch_descriptor(fake_binary, "native")

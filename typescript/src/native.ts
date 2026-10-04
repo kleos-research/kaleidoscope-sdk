@@ -55,6 +55,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The one refusal code the attempt loop sends again: the engine's busy-vault
+ * refusal. Every other refusal is an answer about the request or the vault,
+ * and a second spawn would only repeat it.
+ */
+const BUSY_REFUSAL_CODE = "contended";
+
+function isBusyRefusal(response: unknown): boolean {
+  return isRecord(response) && response.code === BUSY_REFUSAL_CODE;
+}
+
 function parseJson(text: string | Buffer, label: string): unknown {
   try {
     return JSON.parse(Buffer.isBuffer(text) ? text.toString("utf8") : text);
@@ -365,7 +376,20 @@ class NativeCaller {
           );
           continue;
         }
-        if (result.code !== 0) throw new NativeRefusalError(operation, parsed);
+        if (result.code !== 0) {
+          const refusal = new NativeRefusalError(operation, parsed);
+          if (!isBusyRefusal(parsed)) throw refusal;
+          // The engine's busy-vault refusal: another call held the vault past
+          // the engine's own wait, nothing was applied, and the envelope's next
+          // line says to send the same call again. So it takes the next
+          // attempt, inside the same deadline; if it is still the answer when
+          // the budget runs out, the engine's refusal is what the caller gets.
+          // An engine before this envelope existed printed nothing on stdout
+          // for the same condition, and the parse failure above still retries
+          // that.
+          lastFailure = refusal;
+          continue;
+        }
         return parsed;
       } catch (error) {
         if (
@@ -391,6 +415,7 @@ class NativeCaller {
         throw error;
       }
     }
+    if (lastFailure instanceof NativeRefusalError) throw lastFailure;
     if (lastFailure instanceof DeadlineExceededError) {
       throw new DeadlineExceededError(
         "native call exhausted its original deadline after one bounded retry",

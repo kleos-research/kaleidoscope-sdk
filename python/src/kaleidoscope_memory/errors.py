@@ -230,7 +230,15 @@ class ProtocolError(IntegrationError):
 
 
 class NativeRefusalError(IntegrationError):
-    """A direct native call returned a parsed refusal and was not retried."""
+    """A direct native call returned a parsed refusal envelope.
+
+    `response` is the engine's envelope, unchanged. A refusal is not retried,
+    with one exception: the busy-vault refusal (`response["code"] ==
+    "contended"`), which says another call held the vault and the same call
+    should be sent again. `Controller` sends it again within its attempt budget
+    and deadline, and raises this error only if the vault is still busy when
+    they run out. `Operator` makes one attempt and never retries.
+    """
 
     code = "native_refusal"
 

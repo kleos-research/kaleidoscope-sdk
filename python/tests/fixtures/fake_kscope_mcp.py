@@ -57,6 +57,17 @@ class StrictDelta(BaseModel):
     facts: Annotated[list[str], Field(json_schema_extra=_engine_shaped_facts)] = []
 
 
+#: The busy-vault refusal: another call held the vault past the engine's own
+#: wait. `code` is the public error code; the SDK reads nothing else from it.
+BUSY_PROSE = "kscope: refused, nothing applied: the vault is held by another call\n"
+BUSY_ENVELOPE = {
+    "status": "refused",
+    "code": "contended",
+    "message": "the vault is held by another call",
+    "next": "Busy, not wrong: send the same call again shortly.",
+}
+
+
 # --------------------------------------------------------------------------
 # Alpha entitlement stand-in.
 #
@@ -325,6 +336,28 @@ def native_call(operation: str, json_receipt: bool) -> None:
         return
     if mode == "refuse":
         print('{"status":"refused","code":"invalid_schema"}')
+        raise SystemExit(2)
+    if mode == "refuse_code":
+        # Any public refusal code, in the envelope's shape.
+        envelope = {
+            "status": "refused",
+            "code": payload["_refusal_code"],
+            "message": "fixture refusal",
+        }
+        print(json.dumps(envelope, separators=(",", ":"), sort_keys=True))
+        raise SystemExit(2)
+    if mode == "contended" or (mode == "contended_once" and invocation == 1):
+        # The busy-vault refusal as an engine with the refusal envelope prints
+        # it: the envelope on stdout, the prose on stderr, exit 2.
+        print(json.dumps(BUSY_ENVELOPE, separators=(",", ":"), sort_keys=True))
+        sys.stderr.write(BUSY_PROSE)
+        sys.stderr.flush()
+        raise SystemExit(2)
+    if mode == "silent_busy_once" and invocation == 1:
+        # The same condition as an engine older than that envelope reports it:
+        # the prose on stderr, NOTHING on stdout, exit 2.
+        sys.stderr.write(BUSY_PROSE)
+        sys.stderr.flush()
         raise SystemExit(2)
     if mode == "entitlement_refusal":
         refuse(str(payload.get("_entitlement_code", "E_UNVERIFIED")))
