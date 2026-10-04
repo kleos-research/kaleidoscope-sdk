@@ -1550,7 +1550,16 @@ mod tests {
             .unwrap();
         let wedged = fs::read_to_string(&target)
             .unwrap()
-            .replace("persist only verified", "persist every");
+            // Tamper on the heading, not on a sentence. Keying this to a phrase
+            // in the shipped body made the test silently stop testing when the
+            // body was reworded: the replace became a no-op, the block stayed
+            // byte-identical, and "a hand-edited block refuses" passed by never
+            // hand-editing anything. The heading is structural and is what the
+            // sibling tests below already tamper with.
+            .replace(
+                "## Kaleidoscope memory",
+                "## Kaleidoscope memory\nUSER TAMPERED",
+            );
         fs::write(&target, &wedged).unwrap();
 
         {
@@ -1572,8 +1581,8 @@ mod tests {
             .discarded
             .clone()
             .expect("--force must disclose the discarded bytes");
-        assert!(discarded.contains("persist every"));
-        assert!(forced.preview().contains("persist every"));
+        assert!(discarded.contains("USER TAMPERED"));
+        assert!(forced.preview().contains("USER TAMPERED"));
         forced.apply().unwrap();
         let after = fs::read_to_string(&target).unwrap();
         assert!(after.contains("# Keep me"), "user text lost: {after:?}");
@@ -1748,19 +1757,36 @@ mod tests {
     #[test]
     fn canonical_skill_keeps_the_public_boundary_and_privacy_rules() {
         let skill = include_str!("../skills/use-kaleidoscope/SKILL.md");
-        for required in [
-            "`search`",
-            "`remember`",
-            "live write schema",
-            "Do not store tentative brainstorming, secrets, credentials, tokens, transcripts",
-            "Do not construct direct vault-coordinate commands",
-            "exposure",
-            "repository evidence map",
-            "one create batch",
+        // Each entry is a short token standing for a RULE, not a sentence the
+        // skill has to keep word for word.
+        //
+        // This list used to pin phrases instead: `live write schema`, a
+        // twelve-word privacy sentence quoted exactly, `exposure`, and
+        // `repository evidence map`. That made the skill unrewritable without
+        // failing a test named for its rules -- and it froze in place exactly
+        // the internal vocabulary the skill is meant to keep OUT of a reader's
+        // way. `exposure` and `repository evidence map` are gone deliberately:
+        // both named an internal mechanism the reader cannot act on, and the
+        // rules they were standing in for are checked below by what they
+        // actually require.
+        for (rule, token) in [
+            ("the read tool is named", "`search`"),
+            ("the write tool is named", "`remember`"),
+            ("the live schema is the authority", "kscope schema remember"),
+            ("a profile, never raw vault coordinates", "--profile"),
+            ("secrets are never stored", "secrets"),
+            ("credentials are never stored", "credentials"),
+            ("transcripts are never stored", "transcripts"),
+            ("every entity carries a matcher gloss", "`is`"),
+            ("a revision corrects rather than duplicates", "corrections"),
+            // The skill's whole job is teaching a write, and it shipped for
+            // months without a single worked example. This is the guard that
+            // it never does so again.
+            ("a worked write example is present", "\"mode\": \"create\""),
         ] {
             assert!(
-                skill.contains(required),
-                "missing canonical rule: {required}"
+                skill.contains(token),
+                "the skill no longer says {rule} (looked for {token})"
             );
         }
         for forbidden in [

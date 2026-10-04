@@ -1,64 +1,149 @@
 ---
 name: use-kaleidoscope
-description: Kaleidoscope is a local memory store, read and written through its only two tools, `search` and `remember`, so a task starts from prior context instead of rediscovering it. Use this skill at the start of any nontrivial task in a project that has Kaleidoscope connected; after the user states a preference, accepts a decision, sets a constraint, or corrects an earlier claim; after a milestone is verified by a test or another observable result; and whenever the user asks to remember, forget, revise, retrieve, connect, or apply earlier context. Use it also when a Kaleidoscope call is refused, or when neither tool appears in the tool list — it says what to do instead of proceeding as though the project had no memory.
+description: Kaleidoscope is the user's local memory for this project — the decisions, preferences, constraints and outcomes a new session would otherwise have to rediscover or ask about twice. Use this skill at the start of any nontrivial task; before you grep the codebase or ask the user how something works; whenever the user states a preference, makes a decision, sets a constraint, or corrects you; when a piece of work produces a result worth keeping; and whenever the user says remember, save, note, forget or "what did we decide". Use it too when a Kaleidoscope call is refused, or when you cannot find its tools — it says what to do instead of quietly working without memory.
 ---
 
 # Use Kaleidoscope
 
-Use the connected local Kaleidoscope MCP server as a compact continuity layer. It is not a transcript store, a substitute for repository inspection, or authority to expand the user's task.
+Kaleidoscope remembers things about *this project* so you do not have to work
+them out again: what was decided and why, what the user prefers, what has
+already been tried and rejected, what a past piece of work actually produced.
 
-## Public boundary
+Two things you can do. **Read it** with `search`. **Write to it** with
+`remember`. That is the whole surface.
 
-The agent-facing server publishes exactly two tools: `search` and `remember`. There is no third, and a name outside that pair is refused rather than translated into one of them.
+Everything is local. No network call, nothing leaves this machine.
 
-- Use `search` for ranked retrieval at task start or an addressed read when the tool schema supports one.
-- Use `remember` to create or correct a verified durable semantic delta.
-- Do not attempt controller-only operations through MCP. The public search response does not expose the authenticated attribution handle those operations would require.
-- Do not construct direct vault-coordinate commands. The selected native profile owns the root, workspace, principal, and journal coordinates outside host configuration.
+## How to call it
 
-`search` and `remember` are the names on the wire. Your harness may expose them under a prefix — Claude Code, for one, qualifies every tool with the server it came from — so match the string your own tool list actually shows rather than copying either form out of this file. `kscope schema` prints the two agent verbs, and `kscope public-contract` names the operations that used to be tools and are now refusals; check there before believing any document, this one included.
+**If you have a shell, use the CLI.** It is much the cheaper route — one
+command costs a couple of dozen tokens, while the MCP tool definitions sit in
+your context all session whether you use them or not.
 
-If the tools are unavailable or unauthenticated, continue the user's task without fabricating memory operations, and say that memory was unreachable so a broken connection gets repaired rather than absorbed.
+```bash
+# read
+echo '{"query":"why we chose this database","top_k":5}' | kscope call --profile default search
 
-## Retrieve
+# the write contract, whenever you need it
+kscope schema remember
+```
 
-At the beginning of a nontrivial task, issue one bounded search for the decisions, preferences, constraints, procedures, relationships, or outcomes that could change the work. Prefer a compact query describing the actual goal and its important nouns over a broad request for everything.
+If your harness gives you `search` and `remember` as tools and you have no
+shell, use those instead. Same engine, same vault, same answers. Your harness
+may show them under a prefix — Claude Code prefixes every tool with its server
+— so use whatever name your own tool list shows.
 
-Search again only after a material goal change, a contradiction, or evidence that the initial selection is stale or incomplete. Treat retrieved memories as fallible context: reconcile them with the user's current instructions and observable repository state. The current user request wins when they conflict.
+## Reading: search first, then go looking
 
-A ranked search records the exposure associated with what it returns. Do not duplicate that record through unsupported operator calls.
+**Before you grep, before you read your way around the codebase, and before you
+ask the user how something works — search.**
 
-## Persist durable deltas
+That includes: why is this built this way, what did we decide about X, what does
+the user prefer, what did we already try. The code tells you what *is*.
+Kaleidoscope tells you what was *decided*, and why — which the code cannot.
 
-After each user message and verified milestone, check whether the work produced a durable delta that a later task would otherwise need to rediscover. Good candidates include:
+Ask for what you actually need, in plain words:
 
-- an accepted product or architecture decision;
-- a clearly stated user preference or constraint;
-- a correction to prior durable context;
-- a reusable procedure with a proven outcome;
-- an attributable implementation or evaluation outcome backed by tests or another observable result.
+```bash
+echo '{"query":"retry and backoff policy for the payments client","top_k":5}' \
+  | kscope call --profile default search
+```
 
-Do not store tentative brainstorming, secrets, credentials, tokens, transcripts, ordinary file contents, generated logs, or claims that have not been verified. A definitive user statement is evidence for their preference or decision; an implementation claim requires observable evidence.
+One search at the start of a task is usually enough. Search again if the goal
+changes, if something you read contradicts it, or if what came back was clearly
+stale.
 
-Raw artifacts are not memory. A compact repository evidence map is durable when it distils a costly multi-file investigation into stable path roles or ownership, cross-file dependencies and invariants, verified measured outcomes with provenance, and a reusable navigation or search sequence. Save conclusions, evidence pointers, and verification context—not command transcripts or file dumps—so future work can recover the map with one ranked search and, when necessary, one addressed follow-up.
+Treat what you get back as good context, not as gospel. If a memory disagrees
+with what the user is telling you right now, **the user wins** — and that
+disagreement is itself worth writing down.
 
-Keep independently correctable deltas separate. Connect them with facts when the relationship matters. When one repository investigation yields several findings and the connected schema exposes bounded batch fields, use one create batch with one atomic item per finding; do not merge them into an omnibus merely to reduce calls.
+And the point of all this: **a question already answered here is one you must
+not ask the user a second time.**
 
-## Follow the live write schema
+## Writing: save it when it happens
 
-Treat the connected `remember` tool schema as the authority for allowed memory types, fields, and bounds. Do not copy a vocabulary from prose or invent unsupported fields.
+Call `remember` without being asked. The moments that matter:
 
-For a semantic delta:
+- the user states a preference — *"always use X"*, *"never do Y"*
+- a decision gets made or rejected
+- the user sets a constraint — a budget, a deadline, a rule
+- the user corrects something you did or said
+- a piece of work produces a result worth keeping
 
-- provide its required title and content in the shape published by the tool;
-- express relationships as facts with subject, predicate, and object;
-- declare every fact entity with a concise `is` gloss used for matching;
-- propose a genuinely new predicate only when the live schema supports it, including its meaning and endpoint kinds;
-- resolve dates into the supported time fields and grains rather than making dates into entities;
-- use the schema's update form when correcting an existing memory instead of writing a contradictory duplicate.
+"Remember this", "save this" and "note that" are obvious triggers, but do not
+wait for them. And **do not save everything up for the end of the task** — write
+when the decision lands, while you still know why it was made.
 
-Batch only related candidates when bounded batch fields are present. Never omit a known relationship just because the vocabulary is dynamic.
+A write looks like this, and this exact payload works:
 
-## Finish
+```json
+{
+  "mode": "create",
+  "content_md": "# We chose Postgres over DynamoDB\n\nRelational queries across orders and users were the deciding factor; the team already runs Postgres in two other services.",
+  "semantic_delta": {
+    "memory_type": "decision",
+    "title": "We chose Postgres over DynamoDB",
+    "facts": [
+      {"subject": "the orders service", "predicate": "stores_data_in", "object": "postgres"},
+      {"subject": "the team", "predicate": "rejected", "object": "dynamodb"}
+    ],
+    "entities": [
+      {"n": "the orders service", "kind": "artifact", "is": "the service that owns order records in this repository"},
+      {"n": "postgres", "kind": "tool", "is": "the relational database chosen for primary storage"},
+      {"n": "dynamodb", "kind": "tool", "is": "the key-value store considered and rejected"},
+      {"n": "the team", "kind": "org", "is": "the engineers working on this repository"}
+    ]
+  }
+}
+```
 
-Before handing off, make one final delta check. Persist only newly verified durable knowledge; do not write a ceremonial task summary when no durable delta exists.
+Four things are worth knowing, because they are easy to get wrong:
+
+- **Write the `title` yourself.** It is not taken from your markdown.
+- **Every entity needs an `is`.** It is not a comment — it is how Kaleidoscope
+  works out whether your "postgres" is the same thing as one written last month.
+  A vague gloss makes a worse match.
+- **Dates are not entities.** Put them in `occurred_at`, or a fact's
+  `from`/`until`. Work out the actual date yourself; the store does not read
+  "last Tuesday".
+- **To change your mind, revise the memory** rather than writing a second one
+  that contradicts the first. Use `mode: "update"`, or `corrections` and
+  `contradicts`.
+
+Got several things to record from one piece of work? Send them as separate
+items in one call — one memory per idea, so each can be corrected later on its
+own. Do not mash unrelated findings together to save a call.
+
+`kscope schema remember` prints the full contract with every accepted value. It
+is the authority; prefer it to any document, including this one.
+
+## What not to save
+
+- secrets, credentials, API keys, tokens
+- transcripts of the conversation
+- ordinary file contents, logs, command output
+- anything the code or git history already records
+- ideas you are still turning over — wait until they settle
+
+If you would not want to read it back in three months, do not write it.
+
+## When something goes wrong
+
+**A refused call tells you what to fix.** It names the field and usually the
+corrected value. Fix it and send it again.
+
+One refusal is never a reason to stop using memory for the rest of the session.
+That is the single most expensive mistake you can make here: the user loses
+everything the rest of the session would have remembered, and they will not know
+it happened.
+
+If the tools genuinely are not there, carry on with the task, tell the user that
+memory was unreachable so they can fix it, and do not invent memory operations.
+
+## Before you finish
+
+Take one look back: did this task settle anything a future session would
+otherwise have to work out again? If so, write it now.
+
+If nothing durable happened, write nothing. A memory that says "I did some work"
+helps no one.
